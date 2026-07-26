@@ -1,0 +1,20 @@
+---
+const path = Astro.url.pathname;
+---
+
+<header>
+  <a class="brand" href="/"><span>zk@notes</span>:~$</a>
+  <nav aria-label="主导航">
+    <a class:list={{ active: path === '/' || path.startsWith('/blog/') }} href="/">./posts</a>
+    <a class:list={{ active: path === '/about/' }} href="/about/">./about</a>
+  </nav>
+</header>
+
+<style>
+  header { display: flex; align-items: center; justify-content: space-between; padding: 28px 0; border-bottom: 1px solid var(--line); }
+  .brand { color: var(--muted); font: 600 .82rem var(--mono); }
+  .brand span { color: var(--ink); }
+  nav { display: flex; gap: 24px; }
+  nav a { color: var(--muted); font: .8rem var(--mono); }
+  nav a:hover, nav a.active { color: var(--ink); text-decoration: underline; text-underline-offset: 5px; }
+</style>

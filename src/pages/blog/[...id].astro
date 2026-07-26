@@ -1,0 +1,77 @@
+---
+import { getCollection, render } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+export async function getStaticPaths() {
+  const posts = (await getCollection('blog', ({ data }) => !data.draft))
+    .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+  return posts.map((post, index) => ({
+    params: { id: post.id },
+    props: {
+      post,
+      previous: posts[index - 1],
+      next: posts[index + 1],
+    },
+  }));
+}
+
+const { post, previous, next } = Astro.props;
+const { Content } = await render(post);
+const date = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: 'long', day: 'numeric'
+}).format(post.data.date);
+---
+
+<BaseLayout title={`${post.data.title} | ZK / NOTES`} description={post.data.description}>
+  <article>
+    <header>
+      <a class="back" href="/"><span>$</span> cd ../..</a>
+      <h1>{post.data.title}</h1>
+      <div class="meta">
+        <time datetime={post.data.date.toISOString()}>{date}</time>
+        <span>{post.data.tags.map((tag) => `#${tag}`).join(' ')}</span>
+      </div>
+    </header>
+    <div class="prose"><Content /></div>
+    <nav class="post-nav" aria-label="文章导航">
+      {previous ? (
+        <a href={`/blog/${previous.id}/`}>
+          <span>$ cd ../{previous.id}</span>
+          <strong>{previous.data.title}</strong>
+        </a>
+      ) : <span />}
+      {next ? (
+        <a class="next" href={`/blog/${next.id}/`}>
+          <span>$ cd ../{next.id}</span>
+          <strong>{next.data.title}</strong>
+        </a>
+      ) : <span />}
+    </nav>
+  </article>
+</BaseLayout>
+
+<style>
+  article { padding: 58px 0 120px; }
+  article > header { padding-bottom: 36px; border-bottom: 1px solid var(--line); }
+  .back { color: var(--muted); font: .76rem var(--mono); }
+  .back span { color: var(--ink); }
+  h1 { max-width: 850px; margin: 38px 0 24px; font-size: clamp(1.9rem, 4vw, 2.5rem); }
+  .meta { display: flex; gap: 22px; color: var(--muted); font: .72rem var(--mono); }
+  .prose { width: min(100%, 700px); margin: 56px auto 0; font-family: ui-serif, Georgia, "Noto Serif SC", serif; font-size: 1.06rem; }
+  .prose :global(h2) { margin: 2.4em 0 .8em; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 1.55rem; }
+  .prose :global(p) { margin: 1.25em 0; }
+  .prose :global(a) { text-decoration: underline; text-underline-offset: 4px; }
+  .prose :global(blockquote) { margin: 2em 0; padding-left: 22px; border-left: 3px solid var(--ink); color: var(--muted); }
+  .prose :global(code) { padding: .15em .35em; background: var(--surface); font-size: .88em; }
+  .prose :global(pre) { overflow: auto; padding: 20px; background: var(--ink); color: var(--paper); }
+  .prose :global(pre code) { padding: 0; background: transparent; }
+  .post-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 80px; padding-top: 30px; border-top: 1px solid var(--line); }
+  .post-nav a { display: grid; gap: 5px; }
+  .post-nav a:hover strong { text-decoration: underline; text-underline-offset: 4px; }
+  .post-nav span { color: var(--muted); font: .7rem var(--mono); }
+  .post-nav strong { font-size: .95rem; }
+  .post-nav .next { text-align: right; }
+  @media (max-width: 600px) {
+    .post-nav { gap: 18px; }
+  }
+</style>

@@ -1,0 +1,37 @@
+---
+import Header from '../components/Header.astro';
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = 'ZK / NOTES',
+  description = '关于技术、生活与持续思考的个人博客。',
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="theme-color" content="#e1e4e2" />
+    <link rel="icon" href="/favicon.svg" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <div class="shell">
+      <Header />
+      <main><slot /></main>
+      <footer>
+        <span>© {new Date().getFullYear()} zk</span>
+        <span>// built with astro</span>
+      </footer>
+    </div>
+  </body>
+</html>

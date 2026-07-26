@@ -1,0 +1,160 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const posts = (await getCollection('blog', ({ data }) => !data.draft))
+  .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+const categories = [...new Set(posts.flatMap(({ data }) => data.tags))];
+const formatDate = (date: Date) => new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit'
+}).format(date);
+---
+
+<BaseLayout title="文章 | ZK / NOTES">
+  <section class="archive" aria-labelledby="archive-title">
+    <div class="heading">
+      <div>
+        <p class="command"><span>$</span> ls ~/posts</p>
+        <h1 id="archive-title">~/posts</h1>
+      </div>
+      <p><span id="visible-count">{posts.length}</span> entries</p>
+    </div>
+
+    <div class="tools">
+      <label class="search">
+        <span class="sr-only">搜索文章</span>
+        <span class="prompt" aria-hidden="true">$ rg</span>
+        <input id="search" type="search" placeholder='"关键词"' autocomplete="off" />
+      </label>
+      <div class="categories" aria-label="按分类筛选">
+        <button class="active" type="button" data-category="全部" aria-pressed="true">#all</button>
+        {categories.map((category) => (
+          <button type="button" data-category={category} aria-pressed="false">#{category}</button>
+        ))}
+      </div>
+    </div>
+
+    <div id="post-list" class="posts">
+      {posts.map((post, index) => (
+        <article
+          data-post
+          data-search={`${post.data.title} ${post.data.description} ${post.data.tags.join(' ')}`.toLocaleLowerCase('zh-CN')}
+          data-categories={post.data.tags.join('|')}
+        >
+          <span class="number">{String(index + 1).padStart(2, '0')}</span>
+          <div>
+            <div class="meta">
+              <time datetime={post.data.date.toISOString()}>{formatDate(post.data.date)}</time>
+              <span>{post.data.tags.map((tag) => `#${tag}`).join(' ')}</span>
+              <span>./{post.id}.md</span>
+            </div>
+            <h2><a href={`/blog/${post.id}/`}>{post.data.title}</a></h2>
+            <p>{post.data.description}</p>
+          </div>
+          <a class="arrow" href={`/blog/${post.id}/`} aria-label={`阅读《${post.data.title}》`}><span>vim</span> ↗</a>
+        </article>
+      ))}
+      <p id="empty" class="empty" hidden>没有找到匹配的文章。</p>
+    </div>
+
+    <nav class="pagination" aria-label="文章分页">
+      <button id="previous" type="button">cd ..</button>
+      <span id="page-status" aria-live="polite">page 1/1</span>
+      <button id="next" type="button">cd ./next</button>
+    </nav>
+  </section>
+</BaseLayout>
+
+<script>
+  const pageSize = 6;
+  const search = document.querySelector<HTMLInputElement>('#search')!;
+  const posts = [...document.querySelectorAll<HTMLElement>('[data-post]')];
+  const categoryButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-category]')];
+  const previous = document.querySelector<HTMLButtonElement>('#previous')!;
+  const next = document.querySelector<HTMLButtonElement>('#next')!;
+  const status = document.querySelector<HTMLElement>('#page-status')!;
+  const count = document.querySelector<HTMLElement>('#visible-count')!;
+  const empty = document.querySelector<HTMLElement>('#empty')!;
+  let category = '全部';
+  let page = 1;
+
+  const render = () => {
+    const query = search.value.trim().toLocaleLowerCase('zh-CN');
+    const matches = posts.filter((post) =>
+      post.dataset.search!.includes(query) &&
+      (category === '全部' || post.dataset.categories!.split('|').includes(category))
+    );
+    const pages = Math.max(1, Math.ceil(matches.length / pageSize));
+    page = Math.min(page, pages);
+    const start = (page - 1) * pageSize;
+
+    posts.forEach((post) => { post.hidden = true; });
+    matches.slice(start, start + pageSize).forEach((post) => { post.hidden = false; });
+    count.textContent = String(matches.length);
+    status.textContent = `page ${page}/${pages}`;
+    previous.disabled = page === 1;
+    next.disabled = page === pages;
+    empty.hidden = matches.length !== 0;
+    console.assert(page >= 1 && page <= pages, '分页状态应在有效范围内');
+  };
+
+  search.addEventListener('input', () => { page = 1; render(); });
+  categoryButtons.forEach((button) => button.addEventListener('click', () => {
+    category = button.dataset.category!;
+    page = 1;
+    categoryButtons.forEach((item) => {
+      const active = item === button;
+      item.classList.toggle('active', active);
+      item.setAttribute('aria-pressed', String(active));
+    });
+    render();
+  }));
+  previous.addEventListener('click', () => { page -= 1; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  next.addEventListener('click', () => { page += 1; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  render();
+</script>
+
+<style>
+  .archive { padding: 62px 0 100px; }
+  .heading { display: flex; justify-content: space-between; align-items: end; padding-bottom: 32px; }
+  .command { margin: 0 0 10px; color: var(--muted); font: .76rem var(--mono); }
+  .command span { color: var(--ink); }
+  h1 { margin: 0; font: 600 clamp(1.9rem, 4vw, 2.4rem) var(--mono); }
+  .heading > p { margin: 0 0 4px; color: var(--muted); font: .72rem var(--mono); }
+  .tools { display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 24px; align-items: start; padding: 22px 0; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--line); }
+  .search { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--ink); }
+  .search .prompt { flex: none; color: var(--ink); font: 600 .78rem var(--mono); }
+  .search input { width: 100%; padding: 8px 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: .78rem var(--mono); }
+  .categories { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+  button { border: 0; border-radius: 2px; background: transparent; color: var(--muted); font: .75rem var(--mono); cursor: pointer; }
+  .categories button { padding: 6px 8px; }
+  button:hover { color: var(--ink); background: var(--surface); }
+  .categories button.active { color: var(--paper); background: var(--ink); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+  article { display: grid; grid-template-columns: 44px 1fr 36px; gap: 16px; padding: 30px 0; border-bottom: 1px solid var(--line); }
+  article[hidden] { display: none; }
+  .number { color: var(--muted); font: 700 .72rem ui-monospace, monospace; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font: .7rem var(--mono); }
+  article h2 { margin: 10px 0 8px; font-size: clamp(1.2rem, 2.5vw, 1.55rem); }
+  article h2 a:hover { text-decoration: underline; text-underline-offset: 5px; }
+  article p { max-width: 620px; margin: 0; color: var(--muted); font-size: .92rem; }
+  .arrow { align-self: center; white-space: nowrap; font: .85rem var(--mono); }
+  .arrow span { color: var(--muted); font-size: .7rem; }
+  .empty { padding: 70px 0; text-align: center; color: var(--muted); }
+  .pagination { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 18px; padding-top: 32px; }
+  .pagination button { width: max-content; padding: 8px; border-bottom: 1px solid transparent; }
+  .pagination button:not(:disabled):hover { border-bottom-color: var(--ink); background: transparent; }
+  .pagination button:last-child { justify-self: end; }
+  .pagination button:disabled { opacity: .35; cursor: not-allowed; }
+  #page-status { color: var(--muted); font: .7rem var(--mono); }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  @media (max-width: 700px) {
+    .archive { padding-top: 54px; }
+    .heading { padding-bottom: 32px; }
+    .tools { grid-template-columns: 1fr; }
+    .categories { justify-content: flex-start; }
+    article { grid-template-columns: 28px 1fr 24px; gap: 8px; }
+    .meta { flex-direction: column; gap: 2px; }
+    .pagination button { padding-inline: 8px; font-size: .82rem; }
+  }
+</style>
