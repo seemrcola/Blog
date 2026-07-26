@@ -1,8 +1,8 @@
 ---
-title: "从 0 开始写一个 Mini Coding Agent"
+title: "从 0 开始写一个 Mini Coding Agent [end]"
 description: "从一次模型调用出发，逐步加入上下文记忆、四个基础工具和 Agent Loop。"
 date: 2026-07-22
-tags: [Agent, TypeScript]
+tags: [Agent, JavaScript]
 ---
 
 网上有一种说法：如果不能用 300 行代码实现一个 coding agent，就还没有真正理解 Agent。原话未必如此，但这个思路很适合用来学习：先放下框架，从最小闭环开始，看看一个 Agent 到底由哪些部分组成。
