@@ -1,12 +1,13 @@
 ---
-const path = Astro.url.pathname;
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+const path = Astro.url.pathname.replace(base.replace(/\/$/, ''), '') || '/';
 ---
 
 <header>
-  <a class="brand" href="/"><span>zk@notes</span>:~$</a>
+  <a class="brand" href={base}><span>zk@notes</span>:~$</a>
   <nav aria-label="主导航">
-    <a class:list={{ active: path === '/' || path.startsWith('/blog/') }} href="/">./posts</a>
-    <a class:list={{ active: path === '/about/' }} href="/about/">./about</a>
+    <a class:list={{ active: path === '/' || path.startsWith('/blog/') }} href={base}>./posts</a>
+    <a class:list={{ active: path === '/about/' }} href={`${base}about/`}>./about</a>
   </nav>
 </header>
 

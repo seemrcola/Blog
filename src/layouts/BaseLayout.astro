@@ -21,7 +21,7 @@ const {
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
     <meta name="theme-color" content="#e1e4e2" />
-    <link rel="icon" href="/favicon.svg" />
+    <link rel="icon" href={`${import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`}favicon.svg`} />
     <title>{title}</title>
   </head>
   <body>
