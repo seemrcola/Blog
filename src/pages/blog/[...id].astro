@@ -17,7 +17,8 @@ export async function getStaticPaths() {
 
 const { post, previous, next } = Astro.props;
 const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
-const { Content } = await render(post);
+const { Content, headings } = await render(post);
+const toc = headings.filter(({ depth }) => depth === 2 || depth === 3);
 const date = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: 'long', day: 'numeric'
 }).format(post.data.date);
@@ -38,7 +39,23 @@ const date = new Intl.DateTimeFormat('zh-CN', {
         <span>{post.data.tags.map((tag) => `#${tag}`).join(' ')}</span>
       </div>
     </header>
-    <div class="prose"><Content /></div>
+    <div class:list={['article-body', { 'with-toc': toc.length > 0 }]}>
+      {toc.length > 0 && (
+        <aside class="toc">
+          <p>本文目录</p>
+          <nav aria-label="本文目录">
+            <ol>
+              {toc.map((heading) => (
+                <li data-depth={heading.depth}>
+                  <a href={`#${heading.slug}`}>{heading.text}</a>
+                </li>
+              ))}
+            </ol>
+          </nav>
+        </aside>
+      )}
+      <div class="prose"><Content /></div>
+    </div>
     <nav class="post-nav" aria-label="文章导航">
       {previous ? (
         <a href={`${base}blog/${previous.id}/`}>
@@ -66,14 +83,24 @@ const date = new Intl.DateTimeFormat('zh-CN', {
   .status { display: inline-flex; align-items: center; gap: 5px; }
   .status::before { width: 6px; height: 6px; border-radius: 50%; background: #b07d48; content: ''; }
   .status.complete::before { background: #59873a; }
-  .prose { width: min(100%, 700px); margin: 56px auto 0; font-family: ui-serif, Georgia, "Noto Serif SC", serif; font-size: 1.06rem; }
-  .prose :global(h2) { margin: 2.4em 0 .8em; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 1.55rem; }
+  .article-body { display: grid; grid-template-columns: minmax(0, 700px); justify-content: center; margin-top: 56px; }
+  .article-body.with-toc { grid-template-columns: 180px minmax(0, 700px); gap: 40px; }
+  .prose { width: 100%; font-family: ui-serif, Georgia, "Noto Serif SC", serif; font-size: 1.06rem; }
+  .prose :global(h2), .prose :global(h3) { scroll-margin-top: 24px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+  .prose :global(h2) { margin: 2.4em 0 .8em; font-size: 1.55rem; }
+  .prose :global(h3) { margin: 2em 0 .7em; font-size: 1.2rem; }
   .prose :global(p) { margin: 1.25em 0; }
   .prose :global(a) { text-decoration: underline; text-underline-offset: 4px; }
   .prose :global(blockquote) { margin: 2em 0; padding-left: 22px; border-left: 3px solid var(--ink); color: var(--muted); }
   .prose :global(code) { padding: .15em .35em; background: var(--surface); font-size: .84em; }
   .prose :global(pre) { overflow: auto; padding: 18px 20px; background: #ffffff; color: #393a34; }
   .prose :global(pre code) { padding: 0; background: transparent; font: .82rem/1.65 var(--mono); }
+  .toc { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow: auto; align-self: start; }
+  .toc > p { margin: 0 0 12px; color: var(--muted); font: 700 .7rem var(--mono); }
+  .toc ol { margin: 0; padding: 0; list-style: none; }
+  .toc a { display: block; padding: 5px 0 5px 12px; border-left: 1px solid var(--line); color: var(--muted); font: .72rem/1.5 var(--mono); }
+  .toc li[data-depth='3'] a { padding-left: 24px; }
+  .toc a:hover, .toc a.active { border-color: var(--ink); color: var(--ink); }
   .post-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 80px; padding-top: 30px; border-top: 1px solid var(--line); }
   .post-nav a { display: grid; gap: 5px; }
   .post-nav a:hover strong { text-decoration: underline; text-underline-offset: 4px; }
@@ -83,4 +110,27 @@ const date = new Intl.DateTimeFormat('zh-CN', {
   @media (max-width: 600px) {
     .post-nav { gap: 18px; }
   }
+  @media (max-width: 820px) {
+    .article-body.with-toc { grid-template-columns: minmax(0, 700px); gap: 36px; }
+    .toc { position: static; max-height: 180px; padding: 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  }
 </style>
+
+<script>
+  const links = [...document.querySelectorAll<HTMLAnchorElement>('.toc a')];
+  const sections = links
+    .map((link) => document.getElementById(link.getAttribute('href')?.slice(1) ?? ''))
+    .filter((section): section is HTMLElement => section !== null);
+
+  const updateActiveLink = () => {
+    const active = sections.findLast((section) => section.getBoundingClientRect().top <= 120) ?? sections[0];
+    links.forEach((link) => {
+      const isActive = link.getAttribute('href') === `#${active?.id}`;
+      link.classList.toggle('active', isActive);
+      isActive ? link.setAttribute('aria-current', 'location') : link.removeAttribute('aria-current');
+    });
+  };
+
+  updateActiveLink();
+  document.addEventListener('scroll', updateActiveLink, { passive: true });
+</script>
