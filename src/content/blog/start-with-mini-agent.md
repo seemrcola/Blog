@@ -177,7 +177,7 @@ function workspacePath(value: unknown) {
 }
 ```
 
-## Read
+### Read
 
 `read` 接收一个相对路径，返回文件内容：
 
@@ -198,7 +198,7 @@ const readTool: Tool = {
 };
 ```
 
-## Write
+### Write
 
 `write` 直接写入完整内容。如果父目录不存在，就先创建目录：
 
@@ -223,7 +223,7 @@ const writeTool: Tool = {
 };
 ```
 
-## Edit
+### Edit
 
 `edit` 使用精确字符串替换。只有 `oldText` 在文件中出现一次时才执行，这样可以避免改错位置：
 
@@ -260,7 +260,7 @@ const editTool: Tool = {
 };
 ```
 
-## Bash
+### Bash
 
 `bash` 在工作目录中执行命令。这里设置了超时时间和输出上限，避免命令无限运行或返回过多内容：
 
