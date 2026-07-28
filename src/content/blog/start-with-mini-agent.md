@@ -393,7 +393,7 @@ try {
 
     history.push({ role: "user", content: input });
 
-    for (let step = 0; step < 20; step++) {
+    while (true) {
       const message = await callModel(history);
       history.push(message);
 
@@ -417,8 +417,6 @@ try {
           content: result,
         });
       }
-
-      if (step === 19) throw new Error("Agent reached the 20-step limit");
     }
   }
 } finally {
@@ -434,4 +432,4 @@ try {
 4. 把工具结果加入消息历史
 5. 再次调用模型，直到得到最终回答
 
-这个内层循环就是最小的 Agent Loop。模型负责决定下一步做什么，我们的程序只负责执行工具并维护消息历史。20 步上限可以防止模型陷入无限调用。至此，这个 Mini Coding Agent 已经可以读取和修改代码、执行命令，并根据执行结果继续完成任务。
+这个内层循环就是最小的 Agent Loop。模型负责决定下一步做什么，我们的程序只负责执行工具并维护消息历史。至此，这个 Mini Coding Agent 已经可以读取和修改代码、执行命令，并根据执行结果继续完成任务。
