@@ -16,7 +16,7 @@ body { margin: 0; color: var(--ink); background: var(--paper); line-height: 1.7;
 a { color: inherit; text-decoration: none; }
 .shell { width: min(calc(100% - 40px), var(--max)); margin: 0 auto; }
 main { min-height: calc(100vh - 164px); }
-footer { display: flex; justify-content: space-between; padding: 30px 0 40px; border-top: 1px solid var(--line); color: var(--muted); font: .72rem var(--mono); }
+footer { display: flex; justify-content: space-between; padding: 30px 0 40px; color: var(--muted); font: .72rem var(--mono); }
 
 .eyebrow { margin: 0 0 16px; color: var(--muted); font-size: .75rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
 h1, h2, h3 { line-height: 1.15; letter-spacing: 0; }

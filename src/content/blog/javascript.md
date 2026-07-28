@@ -1,8 +1,9 @@
 ---
-title: "面试基础知识回顾 [ing]"
+title: "面试基础知识回顾"
 description: "面试基础知识回顾，面试前复习一下基础知识点。"
 date: 2026-07-18
 tags: [技术, JavaScript]
+status: in-progress
 ---
 
 ## 面试准备(面试前复习一下基础知识点)

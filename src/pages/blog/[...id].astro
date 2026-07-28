@@ -30,6 +30,11 @@ const date = new Intl.DateTimeFormat('zh-CN', {
       <h1>{post.data.title}</h1>
       <div class="meta">
         <time datetime={post.data.date.toISOString()}>{date}</time>
+        {post.data.status && (
+          <span class:list={['status', post.data.status]}>
+            {post.data.status === 'complete' ? '已完成' : '进行中'}
+          </span>
+        )}
         <span>{post.data.tags.map((tag) => `#${tag}`).join(' ')}</span>
       </div>
     </header>
@@ -58,6 +63,9 @@ const date = new Intl.DateTimeFormat('zh-CN', {
   .back span { color: var(--ink); }
   h1 { max-width: 850px; margin: 38px 0 24px; font-size: clamp(1.9rem, 4vw, 2.5rem); }
   .meta { display: flex; gap: 22px; color: var(--muted); font: .72rem var(--mono); }
+  .status { display: inline-flex; align-items: center; gap: 5px; }
+  .status::before { width: 6px; height: 6px; border-radius: 50%; background: #b07d48; content: ''; }
+  .status.complete::before { background: #59873a; }
   .prose { width: min(100%, 700px); margin: 56px auto 0; font-family: ui-serif, Georgia, "Noto Serif SC", serif; font-size: 1.06rem; }
   .prose :global(h2) { margin: 2.4em 0 .8em; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 1.55rem; }
   .prose :global(p) { margin: 1.25em 0; }
