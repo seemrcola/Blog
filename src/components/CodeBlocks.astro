@@ -45,27 +45,34 @@
     align-items: center;
     height: 52px;
     padding: 0;
-    border-top: 1px solid #e4e7e5;
+    border-top: 1px solid rgb(190 197 193 / .45);
     background: #fff;
   }
   .code-blocks :global(.code-block-toggle) {
     min-height: 32px;
-    padding: 6px 12px;
-    border: 1px solid var(--ink);
-    border-radius: 2px;
-    color: var(--ink);
-    background: #fff;
-    font: 700 .72rem var(--mono);
+    padding: 6px 8px 5px;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    color: var(--muted);
+    background: transparent;
+    font: 500 .72rem var(--mono);
     cursor: pointer;
     pointer-events: auto;
   }
+  .code-blocks :global(.code-block-toggle::after) {
+    margin-left: 6px;
+    content: '↓';
+  }
+  .code-blocks :global(.code-block-toggle[aria-expanded='true']::after) { content: '↑'; }
   .code-blocks :global(.code-block-toggle:hover) {
-    color: #fff;
-    background: var(--ink);
+    border-bottom-color: var(--line);
+    color: var(--ink);
   }
   .code-blocks :global(.code-block-toggle:focus-visible) {
-    outline: 2px solid var(--ink);
-    outline-offset: 3px;
+    border-bottom-color: var(--ink);
+    outline: 0;
+    box-shadow: 0 1px 0 var(--ink);
+    color: var(--ink);
   }
 </style>
 
