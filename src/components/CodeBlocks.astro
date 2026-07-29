@@ -1,0 +1,103 @@
+<div class="code-blocks" data-code-blocks>
+  <slot />
+</div>
+
+<style>
+  .code-blocks { --code-block-max-height: 416px; }
+  .code-blocks :global(pre) {
+    overflow-x: auto;
+    margin: 1.6em 0;
+    padding: 18px 20px;
+    background: #fff !important;
+    color: #393a34;
+  }
+  .code-blocks :global(pre code) {
+    padding: 0;
+    background: transparent;
+    font: .82rem/1.65 var(--mono);
+  }
+  .code-blocks :global(.expandable-code) {
+    position: relative;
+    margin: 1.6em 0;
+    background: #fff;
+  }
+  .code-blocks :global(.expandable-code pre) { margin: 0; }
+  .code-blocks :global(.expandable-code:not(.is-expanded) pre) {
+    max-height: var(--code-block-max-height);
+    overflow-y: hidden;
+  }
+  .code-blocks :global(.code-block-action) {
+    position: absolute;
+    z-index: 1;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    height: 112px;
+    padding-bottom: 16px;
+    background: linear-gradient(to bottom, rgb(255 255 255 / 0), rgb(255 255 255 / .92) 54%, #fff);
+    pointer-events: none;
+  }
+  .code-blocks :global(.is-expanded .code-block-action) {
+    position: static;
+    align-items: center;
+    height: 52px;
+    padding: 0;
+    border-top: 1px solid #e4e7e5;
+    background: #fff;
+  }
+  .code-blocks :global(.code-block-toggle) {
+    min-height: 32px;
+    padding: 6px 12px;
+    border: 1px solid var(--ink);
+    border-radius: 2px;
+    color: var(--ink);
+    background: #fff;
+    font: 700 .72rem var(--mono);
+    cursor: pointer;
+    pointer-events: auto;
+  }
+  .code-blocks :global(.code-block-toggle:hover) {
+    color: #fff;
+    background: var(--ink);
+  }
+  .code-blocks :global(.code-block-toggle:focus-visible) {
+    outline: 2px solid var(--ink);
+    outline-offset: 3px;
+  }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>('[data-code-blocks]').forEach((root) => {
+    const maxHeight = Number.parseFloat(getComputedStyle(root).getPropertyValue('--code-block-max-height'));
+
+    root.querySelectorAll<HTMLElement>('pre').forEach((pre, index) => {
+      if (pre.scrollHeight <= maxHeight) return;
+
+      const wrapper = document.createElement('div');
+      const action = document.createElement('div');
+      const button = document.createElement('button');
+
+      wrapper.className = 'expandable-code';
+      action.className = 'code-block-action';
+      button.className = 'code-block-toggle';
+      button.type = 'button';
+      button.textContent = '加载更多';
+      button.setAttribute('aria-expanded', 'false');
+      pre.id ||= `code-block-${index + 1}`;
+      button.setAttribute('aria-controls', pre.id);
+
+      pre.before(wrapper);
+      wrapper.append(pre, action);
+      action.append(button);
+
+      button.addEventListener('click', () => {
+        const expanded = wrapper.classList.toggle('is-expanded');
+        button.textContent = expanded ? '收起代码' : '加载更多';
+        button.setAttribute('aria-expanded', String(expanded));
+      });
+    });
+  });
+</script>

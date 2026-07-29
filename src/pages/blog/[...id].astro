@@ -1,6 +1,7 @@
 ---
 import { getCollection, render } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
+import CodeBlocks from '../../components/CodeBlocks.astro';
 
 export async function getStaticPaths() {
   const posts = (await getCollection('blog', ({ data }) => !data.draft))
@@ -54,7 +55,7 @@ const date = new Intl.DateTimeFormat('zh-CN', {
           </nav>
         </aside>
       )}
-      <div class="prose"><Content /></div>
+      <div class="prose"><CodeBlocks><Content /></CodeBlocks></div>
     </div>
     <nav class="post-nav" aria-label="文章导航">
       {previous ? (
@@ -93,8 +94,6 @@ const date = new Intl.DateTimeFormat('zh-CN', {
   .prose :global(a) { text-decoration: underline; text-underline-offset: 4px; }
   .prose :global(blockquote) { margin: 2em 0; padding-left: 22px; border-left: 3px solid var(--ink); color: var(--muted); }
   .prose :global(code) { padding: .15em .35em; background: var(--surface); font-size: .84em; }
-  .prose :global(pre) { overflow: auto; padding: 18px 20px; background: #ffffff; color: #393a34; }
-  .prose :global(pre code) { padding: 0; background: transparent; font: .82rem/1.65 var(--mono); }
   .toc { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow: auto; align-self: start; }
   .toc > p { margin: 0 0 12px; color: var(--muted); font: 700 .7rem var(--mono); }
   .toc ol { margin: 0; padding: 0; list-style: none; }
