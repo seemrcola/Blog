@@ -1,6 +1,6 @@
 ---
 title: "从 0 开始写一个 Mini Coding Agent"
-description: "从一次模型调用出发，逐步加入上下文记忆、四个基础工具和 Agent Loop。"
+description: "先实现可连续交互的对话，再加入对话记忆、四个基础工具和 Agent Loop。"
 date: 2026-07-26
 tags: [Agent, JavaScript]
 status: complete
@@ -8,7 +8,15 @@ status: complete
 
 网上有一种说法：如果不能用 300 行代码实现一个 coding agent，就还没有真正理解 Agent。原话未必如此，但这个思路很适合用来学习：先放下框架，从最小闭环开始，看看一个 Agent 到底由哪些部分组成。
 
-这一篇从一次模型调用开始，逐步加入上下文记忆、对话循环和四个基础工具，最后用 Agent Loop 把它们连接起来。
+这篇文章不从“完整代码”倒推概念，而是按照每一步真正解决的问题来实现：
+
+1. 调用一次模型，确认输入和输出是什么。
+2. 先做一个能反复提问的命令行程序，理解“持续对话”只是交互循环。
+3. 再加入 `history`，让模型真正记住前面的消息。
+4. 给模型准备 `read`、`write`、`edit`、`bash` 四个工具。
+5. 最后把工具调用放进 Agent Loop，让模型可以根据工具结果继续工作。
+
+这个顺序很重要：持续对话解决“程序能不能一直运行”，对话记忆解决“模型能不能理解上一轮”；它们是两个不同的问题。
 
 ## 调用模型
 
@@ -54,17 +62,44 @@ console.log(answer);
 
 这里最重要的是 `messages`。模型每次只会看到这次请求携带的消息，接口本身不会替我们保存对话。
 
-## 保存上下文
+## 先实现持续对话
 
-例如连续问两个问题：
+有了单次调用后，下一步不是立刻设计记忆，而是让程序能够反复接收输入。这样可以先验证命令行交互和程序生命周期，问题也更容易定位。
 
-```text
-You: 1 + 1 等于几？
-Agent: 2
-You: 再加 1 呢？
+这版程序每一轮只发送当前输入，因此它是“持续运行的交互程序”，还不是“有记忆的对话”：
+
+```ts
+// agent.ts
+import { createInterface } from "node:readline/promises";
+import { callModel } from "./llm.ts";
+
+const terminal = createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+try {
+  while (true) {
+    const input = (await terminal.question("You: ")).trim();
+    if (input === "exit") break;
+    if (!input) continue;
+
+    // 每轮都是一次独立请求；此时模型看不到上一轮的输入。
+    const answer = await callModel([
+      { role: "user", content: input },
+    ]);
+    console.log(`Agent: ${answer}\n`);
+  }
+} finally {
+  terminal.close();
+}
 ```
 
-模型要理解“再加 1”，必须同时收到前面的对话：
+这里的“持续”指 `readline` 和 `while` 会持续工作，而不是模型拥有长期记忆。比如先问“1 + 1 等于几？”，再问“再加 1 呢？”，第二次请求只包含后一句，模型自然无法可靠地理解“再加 1”指什么。
+
+## 再加入对话记忆
+
+要让模型理解上下文，需要把每一轮的消息保存下来，并在下一次请求时完整传回去。所谓对话记忆，在这个最小实现里就是一个按顺序排列的消息数组：
 
 ```ts
 const history: Message[] = [
@@ -74,11 +109,7 @@ const history: Message[] = [
 ];
 ```
 
-所谓对话记忆，就是保存这些消息，并在下一次调用时完整地传回去。
-
-## 持续对话
-
-最后用 Node.js 自带的 `readline` 接收输入，再用一个 `while` 循环把整个过程串起来：
+把记忆接回刚才的循环，只需要在调用前后分别追加用户消息和 assistant 消息：
 
 ```ts
 // agent.ts
@@ -108,25 +139,32 @@ try {
 }
 ```
 
-整个程序的核心只有四步：
+现在每轮请求都会带上之前的消息，模型才拥有了跨轮上下文。这个实现有一个实际限制：`history` 会一直增长，最终可能超过模型的上下文窗口。生产环境通常还要做截断、摘要或持久化；但在学习 Agent 的核心机制时，数组已经足够。
 
-1. 接收用户输入
-2. 把输入加入 `history`
-3. 将 `history` 交给模型
-4. 把模型回答也加入 `history`
+到这里可以区分两个概念：
 
-`while` 让这四步不断重复，这就是最小的对话循环。
+- **持续对话**：通过输入循环，让程序能接收很多轮请求。
+- **对话记忆**：通过 `history`，让每次请求携带之前的消息。
 
 ## 定义工具
 
-现在模型只能返回文本，还不能操作代码。一个最小的 coding agent 先准备四个工具就够了：
+目前模型只能返回文本。要让它读取和修改代码，需要把一部分能力交给本地程序执行。这里选择四个最小但互补的工具：
 
-- `read`：读取文件
-- `write`：创建或覆盖文件
-- `edit`：精确修改文件中的一段内容
-- `bash`：执行命令
+| 工具 | 作用 | 为什么需要 |
+| --- | --- | --- |
+| `read` | 读取文件 | 让模型先观察现状，避免盲改 |
+| `write` | 创建或覆盖文件 | 适合生成新文件或完整重写 |
+| `edit` | 替换一段唯一文本 | 适合小范围修改，降低误改概率 |
+| `bash` | 执行工作区命令 | 运行测试、构建和其他开发命令 |
 
-每个工具都有两部分：一份给模型看的定义，以及一段真正执行操作的函数。
+四个工具不是四段散落的特例，而是遵循同一个契约：
+
+1. `name`、`description`、`parameters` 是发给模型的工具定义，描述“什么时候用”和“需要哪些参数”。
+2. `execute` 是只留在本地的实现，真正读写文件或执行命令。
+3. 参数来自模型生成的 JSON，执行前必须校验类型和边界。
+4. 成功返回结果，失败也返回可读的错误，让模型有机会修正参数或换方案。
+
+可以先定义这个契约，再实现四个工具：
 
 ```ts
 // tool.ts
@@ -141,13 +179,14 @@ type Tool = {
     >;
     required: string[];
   };
+  // execute 不会发送给模型，只在本地收到工具调用时执行。
   execute(args: Record<string, unknown>): Promise<string>;
 };
 ```
 
-`name`、`description` 和 `parameters` 告诉模型如何调用工具，`execute` 则留在本地使用，不会发送给模型。
+### 共享校验：先确认参数，再接触文件系统
 
-模型生成的参数属于外部输入，所以执行前需要做最基本的检查。文件工具还要把路径限制在当前工作目录中：
+工具输入属于外部输入，不能直接把 `unknown` 当成路径或命令使用。所有文件工具共用两个小函数：一个检查字符串参数，一个把相对路径解析到工作区并阻止越界。
 
 ```ts
 import { exec } from "node:child_process";
@@ -170,6 +209,7 @@ function workspacePath(value: unknown) {
   if (typeof value !== "string") throw new Error("path must be a string");
 
   const path = resolve(workspace, value);
+  // resolve 会处理 ..；前缀检查把路径限制在当前工作区内。
   if (path !== workspace && !path.startsWith(`${workspace}${sep}`)) {
     throw new Error("path must stay inside the workspace");
   }
@@ -177,9 +217,9 @@ function workspacePath(value: unknown) {
 }
 ```
 
-### Read
+### Read：先读再改
 
-`read` 接收一个相对路径，返回文件内容：
+`read` 接收相对路径并返回 UTF-8 文本。它看起来最简单，却是 Agent 工作流的起点：模型通常需要先读文件，才能决定后续是完整写入还是精确编辑。
 
 ```ts
 const readTool: Tool = {
@@ -193,14 +233,15 @@ const readTool: Tool = {
     required: ["path"],
   },
   async execute(args) {
+    // 文件不存在、权限不足等错误直接抛出，由统一入口转换成工具结果。
     return readFile(workspacePath(args.path), "utf8");
   },
 };
 ```
 
-### Write
+### Write：完整创建或覆盖
 
-`write` 直接写入完整内容。如果父目录不存在，就先创建目录：
+`write` 的语义要明确：它接收完整文件内容，并允许覆盖已有文件。写入前创建父目录，避免“目录不存在”成为模型需要猜测的额外问题。
 
 ```ts
 const writeTool: Tool = {
@@ -217,15 +258,16 @@ const writeTool: Tool = {
   async execute(args) {
     const path = workspacePath(args.path);
     await mkdir(dirname(path), { recursive: true });
+    // write 的覆盖行为是故意的；小范围修改应当使用 edit。
     await writeFile(path, stringArg(args, "content"), "utf8");
     return `Wrote ${args.path}`;
   },
 };
 ```
 
-### Edit
+### Edit：用唯一匹配降低误改
 
-`edit` 使用精确字符串替换。只有 `oldText` 在文件中出现一次时才执行，这样可以避免改错位置：
+`edit` 不让模型传行号或自己拼补丁，而是要求提供一段精确的 `oldText`。只有这段文本恰好出现一次才写回文件：找不到说明上下文过期，出现多次说明定位不够精确，两种情况都应该让模型重新读取文件。
 
 ```ts
 const editTool: Tool = {
@@ -260,9 +302,9 @@ const editTool: Tool = {
 };
 ```
 
-### Bash
+### Bash：给命令设置边界
 
-`bash` 在工作目录中执行命令。这里设置了超时时间和输出上限，避免命令无限运行或返回过多内容：
+`bash` 让 Agent 能运行测试和构建，是能力最强、风险也最高的工具。这里固定工作目录，并设置超时和输出上限，避免命令无限运行或一次返回过大的日志。
 
 ```ts
 const bashTool: Tool = {
@@ -276,22 +318,25 @@ const bashTool: Tool = {
     required: ["command"],
   },
   async execute(args) {
-    const { stdout, stderr } = await execAsync(stringArg(args, "command"), {
-      cwd: workspace,
-      shell: "/bin/bash",
-      timeout: 30_000,
-      maxBuffer: 1024 * 1024,
-    });
+    const { stdout, stderr } = await execAsync(
+      stringArg(args, "command"),
+      {
+        cwd: workspace, // 命令只能从 Agent 的工作区开始执行。
+        shell: "/bin/bash",
+        timeout: 30_000, // 防止测试或脚本卡住整个 Agent Loop。
+        maxBuffer: 1024 * 1024, // 防止巨量输出耗尽内存。
+      },
+    );
     return [stdout, stderr].filter(Boolean).join("\n") || "(no output)";
   },
 };
 ```
 
-`bash` 拥有当前用户的命令执行权限，只适合运行在自己信任的本地环境中，不能直接暴露给外部用户。
+`bash` 拥有当前用户的命令执行权限，因此这套实现只适合自己信任的本地环境。若要服务外部用户，还需要沙箱、权限控制、资源限制和审计，不能只依靠这里的超时配置。
 
 ## 汇总工具
 
-最后把四个工具放进一个数组，并移除本地的 `execute`，得到可以传给模型的工具定义：
+把四个工具放进数组后，对外暴露两种形态：完整的 `tools` 留给本地执行，去掉 `execute` 的 `toolDefinitions` 发给模型。这样可以清楚地区分“模型能提出什么请求”和“程序实际允许做什么”。
 
 ```ts
 export const tools = [readTool, writeTool, editTool, bashTool];
@@ -302,7 +347,7 @@ export const toolDefinitions = tools.map(({ execute, ...definition }) => ({
 }));
 ```
 
-再增加一个入口，根据模型返回的名称找到工具并执行。工具失败时也返回一条结果，让模型有机会理解错误并换一种方式继续：
+再增加一个统一入口，根据模型返回的名称找到工具并执行。JSON 解析失败、工具不存在和工具内部异常，都转成文本结果放回对话，让模型可以看到错误而不是让整个进程直接退出。
 
 ```ts
 export async function runTool(name: string, input: string) {
@@ -310,7 +355,11 @@ export async function runTool(name: string, input: string) {
   if (!tool) return `Error: unknown tool ${name}`;
 
   try {
-    return await tool.execute(JSON.parse(input));
+    const parsed: unknown = JSON.parse(input);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("tool arguments must be an object");
+    }
+    return await tool.execute(parsed as Record<string, unknown>);
   } catch (error) {
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -319,7 +368,7 @@ export async function runTool(name: string, input: string) {
 
 ## 把工具交给模型
 
-工具准备好以后，把 `toolDefinitions` 放进模型请求。这里还有一个重要变化：`callModel` 不再只返回文本，而是返回完整消息，因为工具调用也在这条消息中。
+工具准备好以后，把 `toolDefinitions` 放进模型请求。这里有一个重要变化：`callModel` 不再只返回文本，而是返回完整的 assistant 消息，因为工具调用也保存在这条消息里。
 
 ```ts
 // llm.ts
@@ -370,7 +419,7 @@ export async function callModel(messages: Message[]) {
 
 ## Agent Loop
 
-现在改造之前的对话循环。在用户的一次提问中，只要模型还在调用工具，内层循环就会继续：
+现在改造之前的对话循环。在用户的一次提问中，只要模型还在调用工具，内层循环就会继续；没有工具调用时，内层循环才结束，并等待下一轮用户输入。
 
 ```ts
 // agent.ts
@@ -426,10 +475,12 @@ try {
 
 完整流程可以归纳为五步：
 
-1. 把消息和工具定义交给模型
-2. 模型决定回答问题，或者调用工具
-3. 本地执行工具
-4. 把工具结果加入消息历史
-5. 再次调用模型，直到得到最终回答
+1. 把消息和工具定义交给模型。
+2. 模型决定直接回答，或者提出一个或多个工具调用。
+3. 本地校验参数并执行工具。
+4. 用 `tool_call_id` 把工具结果加入消息历史。
+5. 再次调用模型，直到得到最终回答。
 
-这个内层循环就是最小的 Agent Loop。模型负责决定下一步做什么，我们的程序只负责执行工具并维护消息历史。至此，这个 Mini Coding Agent 已经可以读取和修改代码、执行命令，并根据执行结果继续完成任务。
+外层循环保证 Agent 能持续接收用户问题，`history` 保证跨轮上下文，内层循环则保证一次任务中的“思考 → 工具 → 观察”可以反复进行。三者职责分开后，Agent 的结构就清楚了：模型负责决定下一步做什么，程序负责维护消息并执行被允许的操作。
+
+至此，这个 Mini Coding Agent 已经可以读取和修改代码、执行命令，并根据执行结果继续完成任务。真正的产品还需要更严格的权限、上下文压缩、日志和测试，但这些能力都建立在这几个清晰的基础环节之上。
