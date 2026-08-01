@@ -16,15 +16,42 @@
     background: transparent;
     font: .82rem/1.65 var(--mono);
   }
-  .code-blocks :global(.expandable-code) {
+  .code-blocks :global(.code-block) {
     position: relative;
     margin: 1.6em 0;
     background: #fff;
   }
-  .code-blocks :global(.expandable-code pre) { margin: 0; }
-  .code-blocks :global(.expandable-code:not(.is-expanded) pre) {
+  .code-blocks :global(.code-block pre) {
+    margin: 0;
+    padding-right: 72px;
+  }
+  .code-blocks :global(.code-block.is-expandable:not(.is-expanded) pre) {
     max-height: var(--code-block-max-height);
     overflow-y: hidden;
+  }
+  .code-blocks :global(.code-block-copy) {
+    position: absolute;
+    z-index: 2;
+    top: 10px;
+    right: 12px;
+    min-height: 28px;
+    padding: 4px 6px 3px;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    color: var(--muted);
+    background: rgb(255 255 255 / .88);
+    font: 500 .7rem var(--mono);
+    cursor: pointer;
+  }
+  .code-blocks :global(.code-block-copy:hover) {
+    border-bottom-color: var(--line);
+    color: var(--ink);
+  }
+  .code-blocks :global(.code-block-copy:focus-visible) {
+    border-bottom-color: var(--ink);
+    outline: 0;
+    box-shadow: 0 1px 0 var(--ink);
+    color: var(--ink);
   }
   .code-blocks :global(.code-block-action) {
     position: absolute;
@@ -81,13 +108,47 @@
     const maxHeight = Number.parseFloat(getComputedStyle(root).getPropertyValue('--code-block-max-height'));
 
     root.querySelectorAll<HTMLElement>('pre').forEach((pre, index) => {
-      if (pre.scrollHeight <= maxHeight) return;
-
+      const isExpandable = pre.scrollHeight > maxHeight;
       const wrapper = document.createElement('div');
+      const copyButton = document.createElement('button');
+
+      wrapper.className = `code-block${isExpandable ? ' is-expandable' : ''}`;
+      copyButton.className = 'code-block-copy';
+      copyButton.type = 'button';
+      copyButton.textContent = '复制';
+      copyButton.setAttribute('aria-live', 'polite');
+
+      pre.before(wrapper);
+      wrapper.append(pre, copyButton);
+
+      let resetTimer: number | undefined;
+      copyButton.addEventListener('click', async () => {
+        clearTimeout(resetTimer);
+        const code = pre.textContent ?? '';
+        try {
+          await navigator.clipboard.writeText(code);
+          copyButton.textContent = '已复制';
+        } catch {
+          const textarea = document.createElement('textarea');
+          textarea.value = code;
+          textarea.setAttribute('aria-hidden', 'true');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.append(textarea);
+          textarea.select();
+          const copied = document.execCommand('copy');
+          textarea.remove();
+          copyButton.focus();
+          copyButton.textContent = copied ? '已复制' : '复制失败';
+        }
+        resetTimer = window.setTimeout(() => { copyButton.textContent = '复制'; }, 1600);
+      });
+
+      if (!isExpandable) return;
+
       const action = document.createElement('div');
       const button = document.createElement('button');
 
-      wrapper.className = 'expandable-code';
       action.className = 'code-block-action';
       button.className = 'code-block-toggle';
       button.type = 'button';
@@ -96,8 +157,7 @@
       pre.id ||= `code-block-${index + 1}`;
       button.setAttribute('aria-controls', pre.id);
 
-      pre.before(wrapper);
-      wrapper.append(pre, action);
+      wrapper.append(action);
       action.append(button);
 
       button.addEventListener('click', () => {

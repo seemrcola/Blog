@@ -1,7 +1,7 @@
 ---
 title: "想实现一个自己的播客"
 description: "曾经我们在腾讯会议中做技术分享的时候，就有人提议说要做一个播客。"
-date: 2026-07-18
+date: 2026-07-25
 tags: [技术, 思考]
 status: in-progress
 ---

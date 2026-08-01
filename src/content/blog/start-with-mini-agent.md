@@ -1,7 +1,7 @@
 ---
 title: "从 0 开始写一个 Mini Coding Agent"
 description: "从一次模型调用出发，逐步加入上下文记忆、四个基础工具和 Agent Loop。"
-date: 2026-07-22
+date: 2026-07-26
 tags: [Agent, JavaScript]
 status: complete
 ---
