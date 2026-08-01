@@ -3,7 +3,7 @@ title: "虚拟列表探索"
 description: "学习和研究虚拟列表/复杂虚拟列表的实现"
 date: 2026-07-27
 tags: [技术, 思考]
-status: in-progress
+status: complete
 ---
 
 ## 为什么需要虚拟列表
@@ -12,13 +12,15 @@ status: in-progress
 
 最近遇到的场景是一个 4 小时会议的语音转写，有接近五千条记录。每条记录并不只是文本，还包含头像、昵称等内容，一次性渲染会明显卡顿，此时就需要虚拟列表。
 
-## 原理
+## 定高虚拟列表
 
 定高虚拟列表只需要做三件事：
 
 1. 用一个空元素撑出完整列表的高度，让滚动条保持正确。
 2. 根据 `scrollTop / rowHeight` 算出第一条可见数据。
 3. 只渲染可视区域附近的数据，再用 `translateY` 把它们移动到正确位置。
+
+### 可运行示例
 
 下面是一个 5000 条数据的实际例子。视口高 `360px`，每行高 `52px`，上下各多渲染 3 行来避免快速滚动时出现空白。
 
@@ -158,7 +160,7 @@ status: in-progress
   });
 </script>
 
-## 最小实现
+### 最小实现
 
 去掉演示中的文案和无障碍属性后，核心实现只有下面这些。它不依赖框架，也不需要提前创建 5000 个 DOM 节点。
 
@@ -224,7 +226,7 @@ status: in-progress
 
 `overscan` 不是必需的，但多渲染几行可以遮住快速滚动时浏览器来不及绘制的瞬间。这里只取 3，继续增大只会增加 DOM 数量。
 
-## 把计算和 DOM 操作分开
+### 把计算和 DOM 操作分开
 
 上面的 `getVisibleRange` 不依赖浏览器，可以单独测试。它只负责回答一个问题：给定滚动状态，应该渲染哪一个半开区间 `[start, end)`。
 
@@ -374,9 +376,64 @@ function updateMeasuredHeights(entries) {
 
 实际代码里可以把这个函数作为 `ResizeObserver` 的回调。这样前面行高变化时，用户仍然停留在原来的内容位置。
 
-### 组合成一个可运行版本
+## 列表项包含未知尺寸的图片
 
-下面的示例把上面四步组合起来。每条转写内容故意使用不同长度，滚动时可以看到行高被逐步测量；状态栏则显示当前实际渲染的 DOM 数量。
+图片是最常见的不定高来源。这里假设接口只返回图片地址，不返回宽高：图片下载前，浏览器无法知道它最终会占多高；图片下载后，行高才从估算值变成真实值。
+
+不需要给每张图片单独写一套测量逻辑。继续观察整行即可：图片加载、文字换行、字体变化最终都会改变行元素的高度，`ResizeObserver` 会统一更新 `heights` 和 `offsets`。
+
+创建图片时只做三件事：原生懒加载、异步解码，以及给未知尺寸留一个最低限度的占位。
+
+```js
+const media = document.createElement('div');
+const image = document.createElement('img');
+
+media.className = 'variable-row__media';
+image.className = 'variable-row__image';
+image.src = item.imageUrl;
+image.alt = item.imageAlt ?? '';
+image.loading = 'lazy';
+image.decoding = 'async';
+media.append(image);
+row.append(media);
+
+// 仍然只观察行，不需要监听 image.onload。
+observer.observe(row);
+```
+
+```css
+.variable-row__media {
+  min-height: 160px;
+  background: #f3f4f4;
+}
+
+.variable-row__image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+```
+
+`160px` 不是图片的真实高度，只是避免图片加载前该区域完全塌陷。图片实际高度超过它时，容器会自然撑开；随后 `ResizeObserver` 测到新的整行高度，前缀和与 `spacer` 高度会被重新计算，前面的锚点修正则负责避免内容跳动。这个值应该接近业务中图片区域的常见高度。
+
+如果列表里有的项带图、有的项只有文字，可以从一开始就使用不同估算值：
+
+```js
+const heights = Float64Array.from(
+  data,
+  (item) => item.imageUrl ? 240 : 56,
+);
+```
+
+这样首屏尚未测量时，总高度会更接近真实结果。估算仍然不要求准确，因为每个渲染过的行最终都会被真实高度替换。
+
+原生 `loading="lazy"` 只控制何时请求图片，并不能解决高度问题。虚拟列表本身已经只创建可视区和 overscan 内的节点，所以不需要再用 `IntersectionObserver` 实现一遍图片懒加载。图片加载失败时，占位容器仍保留 `min-height`，行高也不会突然缩成零。
+
+还有一个边界：行滚出渲染区后会被移除，`observer.disconnect()` 已经停止观察旧节点。即使旧图片稍后完成下载，也不会修改 `heights`；它再次进入可视区时，新行会重新创建并重新测量。因此当前实现不需要额外处理过期的 `load` 回调。只有以后改成 DOM 节点池复用时，才需要用数据唯一 ID 检查节点是否仍对应原来的列表项。
+
+### 图片列表示例
+
+下面的示例把上面的方案组合起来。数据只提供图片 URL，不提供图片宽高；每条转写内容也使用不同长度。滚动时图片会陆续加载，行高会被重新测量，状态栏则显示当前实际渲染的 DOM 数量。
 
 <div class="variable-demo" data-variable-list>
   <div class="variable-demo__viewport" role="list" aria-label="不定高会议转写" tabindex="0">
@@ -428,6 +485,16 @@ function updateMeasuredHeights(entries) {
     overflow-wrap: anywhere;
   }
 
+  .variable-demo__image {
+    grid-column: 1 / -1;
+    display: block;
+    width: 100%;
+    min-height: 160px;
+    margin-bottom: 10px;
+    background: #f3f4f4;
+    object-fit: cover;
+  }
+
   .variable-demo__index {
     color: var(--muted);
   }
@@ -444,14 +511,19 @@ function updateMeasuredHeights(entries) {
 </style>
 
 <script>
-  const VARIABLE_ROW_ESTIMATE = 56;
+  const VARIABLE_ROW_ESTIMATE = 240;
   const VARIABLE_OVERSCAN = 3;
   const VARIABLE_TOTAL = 5000;
   const variableSpeakers = ['主持人', '小周', '小林'];
-  const variableData = Array.from({ length: VARIABLE_TOTAL }, (_, index) => ({
-    speaker: variableSpeakers[index % variableSpeakers.length],
-    text: `这是第 ${index + 1} 条会议转写内容。${'这段内容用于模拟不同长度的语音转写。'.repeat(index % 4 + 1)}`,
-  }));
+  const variableImageSizes = [[640, 360], [640, 480], [640, 720], [640, 426]];
+  const variableData = Array.from({ length: VARIABLE_TOTAL }, (_, index) => {
+    const [width, height] = variableImageSizes[index % variableImageSizes.length];
+    return {
+      speaker: variableSpeakers[index % variableSpeakers.length],
+      imageUrl: `https://picsum.photos/seed/virtual-${index}/${width}/${height}`,
+      text: `这是第 ${index + 1} 条会议转写内容。${'这段内容用于模拟不同长度的语音转写。'.repeat(index % 4 + 1)}`,
+    };
+  });
 
   function findVariableIndex(offsets, scrollTop) {
     const last = offsets.length - 2;
@@ -525,6 +597,7 @@ function updateMeasuredHeights(entries) {
         const number = document.createElement('span');
         const speaker = document.createElement('span');
         const text = document.createElement('span');
+        const image = document.createElement('img');
         const item = variableData[index];
 
         row.className = 'variable-demo__row';
@@ -533,13 +606,18 @@ function updateMeasuredHeights(entries) {
         row.setAttribute('aria-posinset', String(index + 1));
         row.setAttribute('aria-setsize', String(VARIABLE_TOTAL));
         row.style.top = `${offsets[index]}px`;
+        image.className = 'variable-demo__image';
+        image.src = item.imageUrl;
+        image.alt = `第 ${index + 1} 条转写配图`;
+        image.loading = 'lazy';
+        image.decoding = 'async';
         number.className = 'variable-demo__index';
         speaker.className = 'variable-demo__speaker';
         text.className = 'variable-demo__text';
         number.textContent = String(index + 1).padStart(4, '0');
         speaker.textContent = item.speaker;
         text.textContent = item.text;
-        row.append(number, speaker, text);
+        row.append(image, number, speaker, text);
         fragment.append(row);
         observer.observe(row);
       }
@@ -560,8 +638,590 @@ function updateMeasuredHeights(entries) {
 
 这里有一个故意保留的简化：每次高度变化都会从头重建 `offsets`，所以更新成本是 `O(n)`。5000 条转写记录通常够用；如果测量更新已经成为瓶颈，再把位置表替换成 Fenwick 树或线段树，查询和更新都可以降到 `O(log n)`。
 
-## 这版不处理什么
+## TypeScript 无头虚拟列表
 
-这版已经处理动态行高，但仍不处理滚动到指定项、数据异步加载和列表项焦点保持。这些能力会继续增加实现复杂度；真正遇到这些需求时，可以在当前算法上继续补齐，或者使用成熟的虚拟列表库。
+前面的纯函数只能复用区间计算，高度缓存、测量更新和滚动锚点仍然写在 DOM 代码里。换成 Vue 或 React 时，这些状态逻辑还要再实现一次，因此还不算真正的无头层。
 
-补一条更具体的：如果后面要支持插入、删除，或者向上加载历史消息，`offsets` 都需要重新计算；而 `scrollToIndex` 之所以麻烦，也是因为它必须先通过前缀和定位，再把滚动位置精确落到目标项上。
+更合适的边界是：核心层接收数量、估算高度、视口状态和测量结果，输出 `VirtualItem[]`、总高度与滚动修正量；DOM 适配层负责读取 `scrollTop`、调用 `ResizeObserver` 和应用修正；渲染层决定最终创建 DOM，还是交给框架组件渲染。
+
+```txt
+geometry.ts       纯数学计算
+      ↓
+virtualizer.ts    无头状态核心
+      ↓
+dom-adapter.ts    浏览器适配
+      ↓
+main.ts           具体渲染
+```
+
+下面给出完整的 TypeScript + Vite 示例。项目结构如下：
+
+```txt
+virtual-list/
+├─ index.html
+├─ package.json
+├─ tsconfig.json
+└─ src/
+   ├─ main.ts
+   ├─ style.css
+   └─ virtual/
+      ├─ geometry.ts
+      ├─ virtualizer.ts
+      └─ dom-adapter.ts
+```
+
+### 纯计算层：`src/virtual/geometry.ts`
+
+```ts
+export type VisibleRange = {
+  start: number;
+  end: number;
+};
+
+export type ScrollAnchor = {
+  index: number;
+  delta: number;
+};
+
+export function buildOffsets(sizes: ArrayLike<number>): Float64Array {
+  const offsets = new Float64Array(sizes.length + 1);
+
+  for (let index = 0; index < sizes.length; index += 1) {
+    offsets[index + 1] = offsets[index] + sizes[index];
+  }
+
+  return offsets;
+}
+
+export function findIndex(
+  offsets: ArrayLike<number>,
+  scrollOffset: number,
+): number {
+  const last = offsets.length - 2;
+  if (last < 0) return 0;
+
+  let left = 0;
+  let right = last;
+  const target = Math.max(0, scrollOffset);
+
+  while (left < right) {
+    const middle = Math.ceil((left + right) / 2);
+    if (offsets[middle] <= target) left = middle;
+    else right = middle - 1;
+  }
+
+  return left;
+}
+
+export function getVisibleRange(options: {
+  scrollOffset: number;
+  viewportSize: number;
+  offsets: ArrayLike<number>;
+  overscan: number;
+}): VisibleRange {
+  const { scrollOffset, viewportSize, offsets, overscan } = options;
+  const total = offsets.length - 1;
+  if (total === 0) return { start: 0, end: 0 };
+
+  const first = findIndex(offsets, scrollOffset);
+  const last = findIndex(offsets, scrollOffset + viewportSize);
+
+  return {
+    start: Math.max(0, first - overscan),
+    end: Math.min(total, last + 1 + overscan),
+  };
+}
+
+export function getScrollAnchor(
+  offsets: ArrayLike<number>,
+  scrollOffset: number,
+): ScrollAnchor {
+  const index = findIndex(offsets, scrollOffset);
+  return {
+    index,
+    delta: scrollOffset - offsets[index],
+  };
+}
+```
+
+这一层没有类、缓存或浏览器 API，可以直接单测，也可以被任何渲染环境复用。
+
+### 无头核心：`src/virtual/virtualizer.ts`
+
+```ts
+import {
+  buildOffsets,
+  getScrollAnchor,
+  getVisibleRange,
+} from './geometry';
+
+export type ItemKey = string | number;
+
+export type VirtualItem = {
+  key: ItemKey;
+  index: number;
+  start: number;
+  size: number;
+  end: number;
+};
+
+export type VirtualSnapshot = {
+  items: VirtualItem[];
+  totalSize: number;
+};
+
+export type Measurement = {
+  index: number;
+  size: number;
+};
+
+export type MeasureResult = {
+  changed: boolean;
+  scrollAdjustment: number;
+  snapshot: VirtualSnapshot;
+};
+
+export type VirtualizerOptions = {
+  count: number;
+  estimateSize: (index: number) => number;
+  getItemKey?: (index: number) => ItemKey;
+  overscan?: number;
+};
+
+export class Virtualizer {
+  private count: number;
+  private readonly estimateSize: (index: number) => number;
+  private readonly getItemKey: (index: number) => ItemKey;
+  private readonly overscan: number;
+  private sizes: Float64Array;
+  private offsets: Float64Array;
+  private scrollOffset = 0;
+  private viewportSize = 0;
+
+  constructor(options: VirtualizerOptions) {
+    this.count = Math.max(0, options.count);
+    this.estimateSize = options.estimateSize;
+    this.getItemKey = options.getItemKey ?? ((index) => index);
+    this.overscan = Math.max(0, options.overscan ?? 0);
+    this.sizes = Float64Array.from(
+      { length: this.count },
+      (_, index) => this.getEstimate(index),
+    );
+    this.offsets = buildOffsets(this.sizes);
+  }
+
+  setViewport(scrollOffset: number, viewportSize: number): VirtualSnapshot {
+    this.scrollOffset = Math.max(0, scrollOffset);
+    this.viewportSize = Math.max(0, viewportSize);
+    return this.getSnapshot();
+  }
+
+  setCount(count: number): VirtualSnapshot {
+    const nextCount = Math.max(0, count);
+    const nextSizes = new Float64Array(nextCount);
+    const preserved = Math.min(this.count, nextCount);
+
+    nextSizes.set(this.sizes.subarray(0, preserved));
+    for (let index = preserved; index < nextCount; index += 1) {
+      nextSizes[index] = this.getEstimate(index);
+    }
+
+    this.count = nextCount;
+    this.sizes = nextSizes;
+    this.offsets = buildOffsets(this.sizes);
+    return this.getSnapshot();
+  }
+
+  measure(measurements: readonly Measurement[]): MeasureResult {
+    const anchor = getScrollAnchor(this.offsets, this.scrollOffset);
+    const previousAnchorStart = this.offsets[anchor.index] ?? 0;
+    let changed = false;
+
+    for (const measurement of measurements) {
+      const { index } = measurement;
+      const size = Math.max(1, measurement.size);
+
+      if (index < 0 || index >= this.count) continue;
+      if (Math.abs(this.sizes[index] - size) < 0.5) continue;
+
+      this.sizes[index] = size;
+      changed = true;
+    }
+
+    if (!changed) {
+      return {
+        changed: false,
+        scrollAdjustment: 0,
+        snapshot: this.getSnapshot(),
+      };
+    }
+
+    this.offsets = buildOffsets(this.sizes);
+    const nextAnchorStart = this.offsets[anchor.index] ?? 0;
+    const scrollAdjustment = nextAnchorStart - previousAnchorStart;
+    this.scrollOffset += scrollAdjustment;
+
+    return {
+      changed: true,
+      scrollAdjustment,
+      snapshot: this.getSnapshot(),
+    };
+  }
+
+  getSnapshot(): VirtualSnapshot {
+    const { start, end } = getVisibleRange({
+      scrollOffset: this.scrollOffset,
+      viewportSize: this.viewportSize,
+      offsets: this.offsets,
+      overscan: this.overscan,
+    });
+    const items: VirtualItem[] = [];
+
+    for (let index = start; index < end; index += 1) {
+      const itemStart = this.offsets[index];
+      const size = this.sizes[index];
+      items.push({
+        key: this.getItemKey(index),
+        index,
+        start: itemStart,
+        size,
+        end: itemStart + size,
+      });
+    }
+
+    return {
+      items,
+      totalSize: this.offsets[this.count] ?? 0,
+    };
+  }
+
+  private getEstimate(index: number): number {
+    return Math.max(1, this.estimateSize(index));
+  }
+}
+```
+
+### DOM 适配层：`src/virtual/dom-adapter.ts`
+
+```ts
+import {
+  Virtualizer,
+  type Measurement,
+  type VirtualSnapshot,
+} from './virtualizer';
+
+export type DOMAdapterOptions = {
+  scrollElement: HTMLElement;
+  virtualizer: Virtualizer;
+  onChange: (snapshot: VirtualSnapshot) => void;
+};
+
+export class DOMVirtualizerAdapter {
+  private readonly scrollElement: HTMLElement;
+  private readonly virtualizer: Virtualizer;
+  private readonly onChange: (snapshot: VirtualSnapshot) => void;
+  private readonly rowObserver: ResizeObserver;
+  private readonly viewportObserver: ResizeObserver;
+  private frame: number | null = null;
+
+  constructor(options: DOMAdapterOptions) {
+    this.scrollElement = options.scrollElement;
+    this.virtualizer = options.virtualizer;
+    this.onChange = options.onChange;
+
+    this.rowObserver = new ResizeObserver((entries) => {
+      const measurements: Measurement[] = entries.map((entry) => ({
+        index: Number((entry.target as HTMLElement).dataset.index),
+        size: entry.target.getBoundingClientRect().height,
+      }));
+      const result = this.virtualizer.measure(measurements);
+
+      if (!result.changed) return;
+      if (Math.abs(result.scrollAdjustment) >= 0.5) {
+        this.scrollElement.scrollTop += result.scrollAdjustment;
+      }
+      this.onChange(result.snapshot);
+    });
+
+    this.viewportObserver = new ResizeObserver(() => this.scheduleUpdate());
+  }
+
+  start(): void {
+    this.scrollElement.addEventListener('scroll', this.scheduleUpdate, {
+      passive: true,
+    });
+    this.viewportObserver.observe(this.scrollElement);
+    this.update();
+  }
+
+  observeRows(elements: readonly HTMLElement[]): void {
+    this.rowObserver.disconnect();
+    elements.forEach((element) => this.rowObserver.observe(element));
+  }
+
+  destroy(): void {
+    this.scrollElement.removeEventListener('scroll', this.scheduleUpdate);
+    this.rowObserver.disconnect();
+    this.viewportObserver.disconnect();
+
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+  }
+
+  private scheduleUpdate = (): void => {
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      this.update();
+    });
+  };
+
+  private update(): void {
+    const snapshot = this.virtualizer.setViewport(
+      this.scrollElement.scrollTop,
+      this.scrollElement.clientHeight,
+    );
+    this.onChange(snapshot);
+  }
+}
+```
+
+适配器只翻译两类信息：把浏览器的滚动和测量结果送进核心，再把核心给出的修正量应用到滚动容器。它不关心列表项具体长什么样。
+
+### 渲染层：`src/main.ts`
+
+```ts
+import './style.css';
+import { DOMVirtualizerAdapter } from './virtual/dom-adapter';
+import {
+  Virtualizer,
+  type VirtualItem,
+  type VirtualSnapshot,
+} from './virtual/virtualizer';
+
+type Transcript = {
+  id: number;
+  speaker: string;
+  imageUrl: string;
+  text: string;
+};
+
+const TOTAL = 5000;
+const speakers = ['主持人', '小周', '小林'];
+const imageSizes = [[640, 360], [640, 480], [640, 720], [640, 426]];
+
+// 模拟接口数据：列表项只有 URL，没有可供虚拟列表使用的宽高字段。
+const data: Transcript[] = Array.from({ length: TOTAL }, (_, index) => {
+  const [width, height] = imageSizes[index % imageSizes.length];
+  return {
+    id: index + 1,
+    speaker: speakers[index % speakers.length],
+    imageUrl: `https://picsum.photos/seed/virtual-${index}/${width}/${height}`,
+    text: `这是第 ${index + 1} 条会议转写内容。${'这段内容用于模拟不同长度的语音转写。'.repeat(index % 4 + 1)}`,
+  };
+});
+
+function getElement<T extends HTMLElement>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`Missing element: ${selector}`);
+  return element;
+}
+
+const viewport = getElement<HTMLDivElement>('#viewport');
+const spacer = getElement<HTMLDivElement>('#spacer');
+const rows = getElement<HTMLDivElement>('#rows');
+const status = getElement<HTMLParagraphElement>('#status');
+
+const virtualizer = new Virtualizer({
+  count: data.length,
+  estimateSize: () => 240,
+  getItemKey: (index) => data[index].id,
+  overscan: 3,
+});
+
+function createRow(virtualItem: VirtualItem): HTMLElement {
+  const item = data[virtualItem.index];
+  const row = document.createElement('article');
+  const image = document.createElement('img');
+  const meta = document.createElement('div');
+  const number = document.createElement('span');
+  const speaker = document.createElement('strong');
+  const text = document.createElement('p');
+
+  row.className = 'row';
+  row.dataset.index = String(virtualItem.index);
+  row.setAttribute('role', 'listitem');
+  row.setAttribute('aria-posinset', String(virtualItem.index + 1));
+  row.setAttribute('aria-setsize', String(data.length));
+  row.style.transform = `translateY(${virtualItem.start}px)`;
+
+  image.className = 'row__image';
+  image.src = item.imageUrl;
+  image.alt = `第 ${item.id} 条转写配图`;
+  image.loading = 'lazy';
+  image.decoding = 'async';
+
+  meta.className = 'row__meta';
+  number.textContent = String(item.id).padStart(4, '0');
+  speaker.textContent = item.speaker;
+  meta.append(number, speaker);
+
+  text.className = 'row__text';
+  text.textContent = item.text;
+  row.append(image, meta, text);
+  return row;
+}
+
+let adapter: DOMVirtualizerAdapter;
+
+function render(snapshot: VirtualSnapshot): void {
+  const elements = snapshot.items.map(createRow);
+  spacer.style.height = `${snapshot.totalSize}px`;
+  rows.replaceChildren(...elements);
+  adapter.observeRows(elements);
+  status.textContent = `当前渲染 ${elements.length} / ${data.length} 个列表项`;
+}
+
+adapter = new DOMVirtualizerAdapter({
+  scrollElement: viewport,
+  virtualizer,
+  onChange: render,
+});
+adapter.start();
+```
+
+### 页面入口：`index.html`
+
+```html
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>未知图片高度的虚拟列表</title>
+  </head>
+  <body>
+    <main>
+      <div id="viewport" role="list" aria-label="不定高图片列表" tabindex="0">
+        <div id="spacer">
+          <div id="rows"></div>
+        </div>
+      </div>
+      <p id="status" aria-live="polite"></p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+```
+
+### 样式：`src/style.css`
+
+```css
+* { box-sizing: border-box; }
+
+body {
+  max-width: 760px;
+  margin: 40px auto;
+  padding: 0 16px;
+  color: #18201d;
+  font-family: system-ui, sans-serif;
+}
+
+#viewport {
+  height: 520px;
+  overflow-y: auto;
+  border: 1px solid #d8ddda;
+  background: #fff;
+  contain: strict;
+  overflow-anchor: none;
+}
+
+#spacer { position: relative; }
+
+#rows {
+  position: absolute;
+  inset: 0 0 auto;
+}
+
+.row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  padding: 14px;
+  border-bottom: 1px solid #e4e7e5;
+}
+
+.row__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 160px;
+  background: #f3f4f4;
+  object-fit: cover;
+}
+
+.row__meta {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+  font: 13px/1.5 ui-monospace, monospace;
+}
+
+.row__meta span { color: #66706c; }
+
+.row__text {
+  margin: 8px 0 0;
+  line-height: 1.65;
+}
+
+#status {
+  margin: 8px 0 0;
+  color: #66706c;
+  font: 12px/1.5 ui-monospace, monospace;
+}
+```
+
+### 工程配置
+
+`package.json`：
+
+```json
+{
+  "name": "headless-virtual-list",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vite": "^7.1.0"
+  }
+}
+```
+
+`tsconfig.json`：
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src"]
+}
+```
+
+安装依赖后运行：
+
+```sh
+npm install
+npm run dev
+```
+
+这套 API 的关键不是类本身，而是边界：`Virtualizer` 不知道滚动元素和列表项 DOM，渲染方也不需要理解前缀和与锚点算法。接入 React 或 Vue 时，保留 `geometry.ts` 与 `virtualizer.ts`，用框架自己的生命周期替换 `dom-adapter.ts` 和 `main.ts` 即可。
