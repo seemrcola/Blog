@@ -36,14 +36,14 @@ status: in-progress
 - 连接状态与异常恢复：处理断线、超时、取消和重传。
 
 ### 1. 什么是信令
-两个互不相识的端点（对等端），为了能够找到对方，需要一个“介绍人”，信令服务器就是这个“介绍人”。  
+两个互不相识的端点（对等端），为了能够找到对方，需要一个`介绍人`，信令服务器就是这个`介绍人`。  
 信令服务主要负责两件事：
 - 让两个端点配对：让他们彼此能够找到对方。
 - 交换建连信息：转发 SDP、ICE Candidate 等信息。
 它帮助双方交`换联系方式`，但并不负责`连接`，也不负责`传输数据`。
 
 ### 2. SDP
-**SDP（Session Description Protocol，会话描述协议）**是一种文本格式，用来描述端点的通信能力和连接参数。
+**SDP（Session Description Protocol，会话描述协议）** 是一种文本格式，用来描述端点的通信能力和连接参数。
 它主要告诉对方：
 - 我要建立什么类型的通信，例如音视频或 DataChannel。
 - 我支持哪些协议和参数。
@@ -53,7 +53,7 @@ status: in-progress
 可以把 SDP 理解成双方交换的“通信配置清单”。它不负责寻找对方，也不传输文件，只负责协商双方该如何通信。  
 
 ### 3. ICE
-**ICE（Interactive Connectivity Establishment）**是 WebRTC 用来寻找两台设备之间可用连接路径的机制。
+**ICE（Interactive Connectivity Establishment）** 是 WebRTC 用来寻找两台设备之间可用连接路径的机制。
 由于设备通常位于路由器、NAT 或防火墙后面，不能直接使用局域网地址连接。ICE 会收集多种候选地址：  
 - Host：设备的本地网络地址。  
 - Server Reflexive：通过 STUN 获取的公网映射地址。  
