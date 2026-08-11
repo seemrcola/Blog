@@ -1,6 +1,6 @@
 ---
-title: "虚拟列表探索"
-description: "学习和研究虚拟列表/复杂虚拟列表的实现"
+title: "虚拟列表探索：从定高到不定高"
+description: "从可视区计算、动态测量和滚动锚定，一步步实现无头虚拟列表"
 date: 2026-07-27
 tags: [技术, 思考]
 status: complete
@@ -8,9 +8,20 @@ status: complete
 
 ## 为什么需要虚拟列表
 
-在不分页的场景下，当数据量非常大时，一次性渲染所有数据会导致页面卡顿甚至崩溃。虚拟列表通过只渲染可视区域内的元素来解决这个问题。
+在不分页的场景下，当数据量和单项 DOM 复杂度都比较高时，一次性渲染所有数据可能导致首次渲染变慢、内存占用升高和滚动卡顿。虚拟列表通过只渲染可视区域附近的元素来减少同时存在的 DOM 数量。
 
-最近遇到的场景是一个 4 小时会议的语音转写，有接近五千条记录。每条记录并不只是文本，还包含头像、昵称等内容，一次性渲染会明显卡顿，此时就需要虚拟列表。
+最近遇到的场景是一个 4 小时会议的语音转写，有接近五千条记录。每条记录并不只是文本，还包含头像、昵称等内容。在目标设备上确认完整渲染存在明显卡顿后，虚拟列表才成为值得采用的方案。数据量不是唯一判断标准，最好先通过实际性能测试确认瓶颈确实来自大量 DOM。
+
+## 阅读路线
+
+这篇文章从简单到复杂分为四层，不必一次读完：
+
+1. **定高列表**：理解占位高度、可视区间和位置偏移，这是虚拟列表最小闭环。
+2. **不定高列表**：加入估算高度、前缀和、二分查找、真实测量和滚动锚定。
+3. **未知尺寸图片**：验证异步内容加载后，测量和锚点修正是否仍然成立。
+4. **无头实现**：把数学计算、状态管理、DOM 适配和渲染拆开，方便接入不同框架。
+
+如果目标只是理解虚拟列表原理，读完定高列表即可；如果业务中的列表项会换行或包含图片，再继续阅读不定高部分；最后的 TypeScript 无头实现主要讨论工程边界。生产项目如果没有特殊需求，应优先评估成熟虚拟列表库，再决定是否维护自己的实现。
 
 ## 定高虚拟列表
 
@@ -100,11 +111,12 @@ status: complete
   const speakers = ['主持人', '小周', '小林'];
 
   function getVisibleRange({ scrollTop, viewportHeight, rowHeight, total, overscan }) {
-    const firstVisible = Math.floor(Math.max(0, scrollTop) / rowHeight);
-    const visibleCount = Math.ceil(viewportHeight / rowHeight);
+    const offset = Math.max(0, scrollTop);
+    const firstVisible = Math.floor(offset / rowHeight);
+    const endVisible = Math.ceil((offset + viewportHeight) / rowHeight);
     return {
       start: Math.max(0, firstVisible - overscan),
-      end: Math.min(total, firstVisible + visibleCount + overscan),
+      end: Math.min(total, endVisible + overscan),
     };
   }
 
@@ -160,6 +172,8 @@ status: complete
   });
 </script>
 
+滚动示例时，状态栏中的总数据量始终是 5000，但实际渲染的列表项通常只有十几条。可以在浏览器开发者工具中检查 `.virtual-demo__row` 的数量，确认 DOM 数量不会随着滚动持续增长。
+
 ### 最小实现
 
 去掉演示中的文案和无障碍属性后，核心实现只有下面这些。它不依赖框架，也不需要提前创建 5000 个 DOM 节点。
@@ -189,11 +203,12 @@ status: complete
 
   // 纯计算：不读取 DOM，也不修改任何外部状态。
   function getVisibleRange({ scrollTop, viewportHeight, rowHeight, total, overscan }) {
-    const firstVisible = Math.floor(Math.max(0, scrollTop) / rowHeight);
-    const visibleCount = Math.ceil(viewportHeight / rowHeight);
+    const offset = Math.max(0, scrollTop);
+    const firstVisible = Math.floor(offset / rowHeight);
+    const endVisible = Math.ceil((offset + viewportHeight) / rowHeight);
     return {
       start: Math.max(0, firstVisible - overscan),
-      end: Math.min(total, firstVisible + visibleCount + overscan),
+      end: Math.min(total, endVisible + overscan),
     };
   }
 
@@ -232,12 +247,13 @@ status: complete
 
 ```js
 function getVisibleRange({ scrollTop, viewportHeight, rowHeight, total, overscan }) {
-  const firstVisible = Math.floor(Math.max(0, scrollTop) / rowHeight);
-  const visibleCount = Math.ceil(viewportHeight / rowHeight);
+  const offset = Math.max(0, scrollTop);
+  const firstVisible = Math.floor(offset / rowHeight);
+  const endVisible = Math.ceil((offset + viewportHeight) / rowHeight);
 
   return {
     start: Math.max(0, firstVisible - overscan),
-    end: Math.min(total, firstVisible + visibleCount + overscan),
+    end: Math.min(total, endVisible + overscan),
   };
 }
 
@@ -281,7 +297,7 @@ rebuildOffsets();
 spacer.style.height = `${offsets[offsets.length - 1]}px`;
 ```
 
-此时列表可以正常滚动，但所有行的位置还是估算值。先把滚动条撑起来很重要，否则用户滚动到后面时，列表总高度会不断变化。
+此时列表可以正常滚动，但所有行的位置还是估算值。先用估算值把滚动条撑起来很重要，否则总高度会从零开始随着已测量内容不断增长。真实测量仍会修正总高度，但变化会小得多。
 
 估算高度最好来自首屏样本的平均值、历史数据的均值，或者一个接近业务分布的经验值。它不需要很准，只要别偏得太离谱就行，因为后面会被真实测量逐步修正。
 
@@ -375,6 +391,8 @@ function updateMeasuredHeights(entries) {
 ```
 
 实际代码里可以把这个函数作为 `ResizeObserver` 的回调。这样前面行高变化时，用户仍然停留在原来的内容位置。
+
+到这里，不定高虚拟列表的反馈闭环已经完整：先估算位置并渲染，浏览器测量真实高度，再更新位置表并修正滚动锚点。验证时可以重点观察两件事：长文本换行后是否重叠，以及上方行高变化时当前内容是否明显跳动。
 
 ## 列表项包含未知尺寸的图片
 
@@ -641,6 +659,8 @@ const heights = Float64Array.from(
 ## TypeScript 无头虚拟列表
 
 前面的纯函数只能复用区间计算，高度缓存、测量更新和滚动锚点仍然写在 DOM 代码里。换成 Vue 或 React 时，这些状态逻辑还要再实现一次，因此还不算真正的无头层。
+
+如果只需要解决当前页面中的不定高列表，可以停在上一节。下面的内容不再增加新的虚拟列表算法，而是把已有算法整理成可测试、可替换渲染层的工程结构。
 
 更合适的边界是：核心层接收数量、估算高度、视口状态和测量结果，输出 `VirtualItem[]`、总高度与滚动修正量；DOM 适配层负责读取 `scrollTop`、调用 `ResizeObserver` 和应用修正；渲染层决定最终创建 DOM，还是交给框架组件渲染。
 
@@ -1225,3 +1245,24 @@ npm run dev
 ```
 
 这套 API 的关键不是类本身，而是边界：`Virtualizer` 不知道滚动元素和列表项 DOM，渲染方也不需要理解前缀和与锚点算法。接入 React 或 Vue 时，保留 `geometry.ts` 与 `virtualizer.ts`，用框架自己的生命周期替换 `dom-adapter.ts` 和 `main.ts` 即可。
+
+## 回顾与取舍
+
+虚拟列表真正需要维护的不是一组 DOM，而是三类状态：列表项尺寸、列表项位置和当前可视区。定高列表可以直接通过乘法得到位置；不定高列表则需要先估算，再通过测量逐步修正。
+
+实现时可以按下面的顺序控制复杂度：
+
+1. 能固定行高时优先使用定高方案。
+2. 行高不可控时，再加入高度缓存、前缀和与二分查找。
+3. 高度修正造成跳动时，再处理滚动锚点。
+4. 只有多个渲染环境需要复用时，才抽取无头核心和 DOM 适配层。
+5. 数据规模继续增大且 `O(n)` 重建已经成为真实瓶颈时，再考虑 Fenwick 树等结构。
+
+本文实现主要用于理解原理和验证业务边界。生产环境还要处理数据插入、删除、排序、稳定 key、滚动到指定项、服务端渲染和浏览器最大滚动高度等问题；如果这些能力都需要，采用成熟库通常比继续扩展示例代码更合适。
+
+## 参考资料
+
+- [MDN：Element.scrollTop](https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollTop)
+- [MDN：ResizeObserver](https://developer.mozilla.org/en-US/docs/Web/API/ResizeObserver)
+- [MDN：overflow-anchor](https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-anchor)
+- [TanStack Virtual](https://tanstack.com/virtual/latest/docs/introduction)

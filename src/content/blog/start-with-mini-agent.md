@@ -8,23 +8,43 @@ status: complete
 
 网上有一种说法：如果不能用 300 行代码实现一个 coding agent，就还没有真正理解 Agent。原话未必如此，但这个思路很适合用来学习：先放下框架，从最小闭环开始，看看一个 Agent 到底由哪些部分组成。
 
+本篇的目标不是实现一个可以直接提供给外部用户的产品，而是做出一个能够持续对话、维护消息历史、读取和修改工作区文件、执行命令，并根据工具结果继续行动的命令行 Agent。完成后，我们可以直接给它一个小型代码任务，观察完整的“模型决定 → 本地执行 → 返回结果 → 模型继续”过程。
+
 这篇文章不从“完整代码”倒推概念，而是按照每一步真正解决的问题来实现：
 
 1. 调用一次模型，确认输入和输出是什么。
 2. 先做一个能反复提问的命令行程序，理解“持续对话”只是交互循环。
 3. 再加入 `history`，让模型真正记住前面的消息。
-4. 给模型准备 `read`、`write`、`edit`、`bash` 四个工具。
+4. 给模型准备 `read`、`write`、`edit`、`bash` 四个基础工具。
 5. 最后把工具调用放进 Agent Loop，让模型可以根据工具结果继续工作。
 
 这个顺序很重要：持续对话解决“程序能不能一直运行”，对话记忆解决“模型能不能理解上一轮”；它们是两个不同的问题。
 
+## 准备工作
+
+下面的代码使用 TypeScript、OpenAI Node.js SDK 和 DeepSeek 的 OpenAI 兼容接口。示例假设运行在安装了 Node.js 的类 Unix 环境，因为后面的 Bash 工具会使用 `/bin/bash`。
+
+先创建项目并安装依赖：
+
+```bash
+mkdir mini-coding-agent
+cd mini-coding-agent
+npm init -y
+npm install openai
+npm install -D tsx @types/node
+```
+
+再配置 DeepSeek API Key。不要把密钥直接写进代码或提交到版本库：
+
+```bash
+export DEEPSEEK_API_KEY="your-api-key"
+```
+
+本文会逐步创建三个文件：`llm.ts` 负责调用模型，`tool.ts` 定义和执行工具，`agent.ts` 维护消息历史与 Agent Loop。
+
 ## 调用模型
 
 DeepSeek 提供了 OpenAI 兼容接口，因此直接使用 OpenAI SDK。请求封装交给 SDK，我们只关注传给模型的消息和模型返回的内容。
-
-```bash
-npm install openai
-```
 
 ```ts
 // llm.ts
@@ -186,7 +206,7 @@ type Tool = {
 
 ### 共享校验：先确认参数，再接触文件系统
 
-工具输入属于外部输入，不能直接把 `unknown` 当成路径或命令使用。所有文件工具共用两个小函数：一个检查字符串参数，一个把相对路径解析到工作区并阻止越界。
+工具输入属于外部输入，不能直接把 `unknown` 当成路径或命令使用。所有文件工具共用两个小函数：一个检查字符串参数，一个把相对路径解析到工作区，并阻止通过绝对路径或 `..` 进行的词法路径越界。
 
 ```ts
 import { exec } from "node:child_process";
@@ -209,13 +229,15 @@ function workspacePath(value: unknown) {
   if (typeof value !== "string") throw new Error("path must be a string");
 
   const path = resolve(workspace, value);
-  // resolve 会处理 ..；前缀检查把路径限制在当前工作区内。
+  // resolve 会处理 ..；前缀检查阻止路径在文本层面离开工作区。
   if (path !== workspace && !path.startsWith(`${workspace}${sep}`)) {
     throw new Error("path must stay inside the workspace");
   }
   return path;
 }
 ```
+
+这仍然不是完整的文件系统沙箱：工作区内的符号链接可能指向外部路径，底层文件 API 会继续跟随它。对于只处理自己代码的本地学习示例，这个限制可以接受；面对不受信任的输入时，还需要真实路径校验、权限隔离或独立沙箱。
 
 ### Read：先读再改
 
@@ -302,9 +324,9 @@ const editTool: Tool = {
 };
 ```
 
-### Bash：给命令设置边界
+### Bash：设置运行约束，不等于沙箱
 
-`bash` 让 Agent 能运行测试和构建，是能力最强、风险也最高的工具。这里固定工作目录，并设置超时和输出上限，避免命令无限运行或一次返回过大的日志。
+`bash` 让 Agent 能运行测试和构建，是能力最强、风险也最高的工具。这里让命令从工作区启动，并设置超时和输出上限，避免单条命令无限运行或一次返回过大的日志。
 
 ```ts
 const bashTool: Tool = {
@@ -321,7 +343,7 @@ const bashTool: Tool = {
     const { stdout, stderr } = await execAsync(
       stringArg(args, "command"),
       {
-        cwd: workspace, // 命令只能从 Agent 的工作区开始执行。
+        cwd: workspace, // 命令从工作区启动，但并没有被限制在工作区内。
         shell: "/bin/bash",
         timeout: 30_000, // 防止测试或脚本卡住整个 Agent Loop。
         maxBuffer: 1024 * 1024, // 防止巨量输出耗尽内存。
@@ -332,7 +354,7 @@ const bashTool: Tool = {
 };
 ```
 
-`bash` 拥有当前用户的命令执行权限，因此这套实现只适合自己信任的本地环境。若要服务外部用户，还需要沙箱、权限控制、资源限制和审计，不能只依靠这里的超时配置。
+`cwd` 只设置命令的初始目录。命令仍然可以使用绝对路径或 `cd ..` 访问工作区外的内容，并拥有当前用户的命令执行权限。因此这套实现只适合自己信任的本地环境。若要服务外部用户，还需要沙箱、权限控制、资源限制和审计，不能只依靠这里的工作目录与超时配置。
 
 ## 汇总工具
 
@@ -421,6 +443,8 @@ export async function callModel(messages: Message[]) {
 
 现在改造之前的对话循环。在用户的一次提问中，只要模型还在调用工具，内层循环就会继续；没有工具调用时，内层循环才结束，并等待下一轮用户输入。
 
+这里有意不限制内层循环的工具轮数：只要模型仍然返回工具调用，任务就继续执行，直到模型给出最终文本回答。单个 Bash 命令仍受前面的超时限制，但整个 Agent 任务没有固定步数上限；需要人工停止时可以直接中断进程。
+
 ```ts
 // agent.ts
 import { createInterface } from "node:readline/promises";
@@ -483,4 +507,33 @@ try {
 
 外层循环保证 Agent 能持续接收用户问题，`history` 保证跨轮上下文，内层循环则保证一次任务中的“思考 → 工具 → 观察”可以反复进行。三者职责分开后，Agent 的结构就清楚了：模型负责决定下一步做什么，程序负责维护消息并执行被允许的操作。
 
-至此，这个 Mini Coding Agent 已经可以读取和修改代码、执行命令，并根据执行结果继续完成任务。真正的产品还需要更严格的权限、上下文压缩、日志和测试，但这些能力都建立在这几个清晰的基础环节之上。
+## 运行与验证
+
+三个文件准备好后启动 Agent：
+
+```bash
+npx tsx agent.ts
+```
+
+可以先给它一个范围明确、结果容易检查的任务：
+
+```txt
+请依次使用 read、write、edit 和 bash 完成任务：读取 package.json 并总结依赖；
+创建 note.txt，写入 hello agent；把 hello 修改成 hello mini agent；
+最后运行命令读取文件并确认结果。
+```
+
+运行过程中应该能看到 `Tool: read`、`Tool: write`、`Tool: edit` 和 `Tool: bash` 等日志，最后得到模型的总结。任务结束后检查 `note.txt`，确认文件内容确实是 `hello mini agent`。这个结果同时验证了工具定义、工具结果回传和内层 Agent Loop。
+
+## 回顾
+
+至此，这个 Mini Coding Agent 已经可以读取和修改代码、执行命令，并根据执行结果继续完成任务。它的核心不是某个框架，而是三个互相配合的循环状态：外层交互循环负责接收任务，消息历史负责保存上下文，内层 Agent Loop 负责持续执行“模型 → 工具 → 结果”。
+
+这仍然是一个可信本地环境中的学习实现，不是安全沙箱。真正面向外部用户的产品还需要更严格的权限隔离、上下文压缩、日志、测试和失败恢复，但这些能力都建立在本文的基础环节之上。
+
+## 参考资料
+
+- [DeepSeek API 文档](https://api-docs.deepseek.com/)
+- [DeepSeek：Function Calling](https://api-docs.deepseek.com/guides/function_calling/)
+- [OpenAI Node.js SDK](https://github.com/openai/openai-node)
+- [Node.js：Child Process](https://nodejs.org/api/child_process.html)
