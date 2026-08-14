@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cordis Context 生命周期速查</title>
+    <link rel="stylesheet" href="../assets/lesson.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Cordis Context 生命周期速查</h1>
+      <p class="lede">从插件加载到卸载，只记住一条所有权链。</p>
+
+      <h2>所有权链</h2>
+
+      <pre><code>ctx.plugin(plugin)
+  → Registry 创建 Fiber
+  → Fiber 创建 child Context
+  → plugin(childCtx)
+  → childCtx.effect(...) 收集 disposer
+  → fiber.dispose()
+  → 逆序执行 disposer</code></pre>
+
+      <h2>三个核心操作</h2>
+
+      <pre><code>ctx.effect(() => {
+  const resource = acquire()
+  return () => release(resource)
+})
+
+const child = ctx.plugin((childCtx) => {
+  // 注册到 childCtx 的生命周期
+})
+
+child.dispose()</code></pre>
+
+      <h2>边界</h2>
+
+      <ul>
+        <li>Context 只管理登记过的副作用。</li>
+        <li>每个子插件拥有独立 Context/Fiber。</li>
+        <li>父 Fiber 持有子 Fiber 的 disposer。</li>
+        <li>卸载时逆序取出 disposer，即使某项失败也应继续清理。</li>
+        <li><code>provide()</code>、<code>on()</code> 等 API 能自动卸载，是因为它们内部使用 effect。</li>
+      </ul>
+
+      <h2>Mini 版暂未实现</h2>
+
+      <ul>
+        <li>异步 effect 和 async generator</li>
+        <li>Fiber 的 PENDING、ACTIVE、FAILED 等状态</li>
+        <li><code>inject</code> 驱动的自动卸载与重载</li>
+        <li>服务、事件、配置和 HMR</li>
+      </ul>
+
+      <footer>
+        返回<a href="../lessons/0001-context-owns-effects.html">第一课</a>。
+      </footer>
+    </main>
+  </body>
+</html>

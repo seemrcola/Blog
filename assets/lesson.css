@@ -1,0 +1,155 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-serif, Georgia, "Noto Serif SC", serif;
+  line-height: 1.75;
+  background: #f6f5f1;
+  color: #232522;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  width: min(760px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 64px 0 96px;
+}
+
+h1,
+h2 {
+  font-family: ui-sans-serif, system-ui, "Noto Sans SC", sans-serif;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+h1 {
+  max-width: 14ch;
+  margin: 0 0 20px;
+  font-size: clamp(2rem, 7vw, 4rem);
+}
+
+h2 {
+  margin-top: 48px;
+  font-size: 1.35rem;
+}
+
+p,
+li {
+  font-size: 1.05rem;
+}
+
+a {
+  color: #176b5b;
+  text-underline-offset: 3px;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 18px;
+  border: 1px solid #c9cbc5;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.lede {
+  max-width: 56ch;
+  font-size: 1.2rem;
+  color: #555951;
+}
+
+.diagram {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 28px 0;
+  font-family: ui-sans-serif, system-ui, "Noto Sans SC", sans-serif;
+  text-align: center;
+}
+
+.diagram > div {
+  min-height: 92px;
+  padding: 16px 10px;
+  border: 1px solid #b9bcb4;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.diagram strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.callout {
+  margin: 28px 0;
+  padding: 18px 20px;
+  border-left: 4px solid #176b5b;
+  background: #e8f0ed;
+}
+
+details {
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid #b9bcb4;
+  border-radius: 6px;
+  background: #fff;
+}
+
+summary {
+  cursor: pointer;
+  font-family: ui-sans-serif, system-ui, "Noto Sans SC", sans-serif;
+  font-weight: 650;
+}
+
+footer {
+  margin-top: 64px;
+  padding-top: 20px;
+  border-top: 1px solid #c9cbc5;
+  color: #62665e;
+}
+
+@media (max-width: 600px) {
+  main {
+    padding-top: 40px;
+  }
+
+  .diagram {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    background: #171916;
+    color: #e6e8e2;
+  }
+
+  .lede,
+  footer {
+    color: #b9bdb4;
+  }
+
+  pre,
+  .diagram > div,
+  details {
+    border-color: #454940;
+    background: #20231f;
+  }
+
+  .callout {
+    background: #17332d;
+  }
+
+  a {
+    color: #76c7b5;
+  }
+}

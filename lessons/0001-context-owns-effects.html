@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>第一课：Context 记录副作用的所有权</title>
+    <link rel="stylesheet" href="../assets/lesson.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Context 记录副作用的所有权</h1>
+      <p class="lede">
+        插件卸载的难点不是调用清理函数，而是知道哪些清理函数属于这个插件。
+      </p>
+
+      <h2>先看泄漏</h2>
+
+      <pre><code>function apply() {
+  bus.on("message", listener)
+  setInterval(refresh, 1000)
+}
+
+apply()
+// 如何完整卸载？</code></pre>
+
+      <p>
+        监听器和定时器都创建成功了，但调用方没有拿到它们的所有权信息。丢失的不是清理能力，而是“谁应当负责清理”的关系。
+      </p>
+
+      <h2>Cordis 的工作模型</h2>
+
+      <div class="diagram" aria-label="Cordis 插件生命周期">
+        <div><strong>Plugin</strong>只通过自己的 <code>ctx</code> 注册</div>
+        <div><strong>Context</strong>把 effect 交给当前 Fiber</div>
+        <div><strong>Fiber</strong>卸载时执行全部 disposer</div>
+      </div>
+
+      <pre><code>const plugin = root.plugin((ctx) => {
+  ctx.effect(() => {
+    bus.on("message", listener)
+    return () => bus.off("message", listener)
+  })
+})
+
+plugin.dispose()</code></pre>
+
+      <div class="callout">
+        Context 不是自动发现副作用的垃圾回收器。只有通过 <code>ctx.effect()</code> 或基于它实现的 API 注册的资源，才会归属于插件生命周期。
+      </div>
+
+      <h2>检索练习</h2>
+
+      <details>
+        <summary>为什么只让插件返回一个 disposer 仍然不够？</summary>
+        <p>嵌套 helper 和子插件必须层层合并、传递 disposer；任何一层遗漏，卸载就不完整。</p>
+      </details>
+
+      <details>
+        <summary>Context 与 Fiber 各自负责什么？</summary>
+        <p>Context 是插件使用的作用域入口；Fiber 保存该作用域的状态和 disposer，并真正执行卸载。</p>
+      </details>
+
+      <details>
+        <summary>直接调用 setInterval 会被自动清理吗？</summary>
+        <p>不会。必须把 clearInterval 注册为 effect，或使用内部已经调用 effect 的 Cordis API。</p>
+      </details>
+
+      <h2>动手验证</h2>
+
+      <p>
+        打开<a href="../examples/mini-cordis/context.test.ts">测试文件</a>，先不要运行代码，尝试预测“父插件、子插件、父插件最后注册的 effect”会以什么顺序清理。然后执行：
+      </p>
+
+      <pre><code>node --test examples/mini-cordis/context.test.ts</code></pre>
+
+      <p>
+        如果预测顺序与测试结果不同，回到“子 Context 自己也是父 Context 的一个 effect”这条关系，再画一次注册顺序和卸载顺序。
+      </p>
+
+      <h2>继续阅读</h2>
+
+      <p>
+        查看<a href="../reference/cordis-context-lifecycle.html">Context 生命周期速查页</a>，再依次对照 Cordis 的
+        <a href="https://github.com/cordiverse/cordis/blob/main/packages/core/src/context.ts">Context</a>、
+        <a href="https://github.com/cordiverse/cordis/blob/main/packages/core/src/registry.ts">Registry</a> 和
+        <a href="https://github.com/cordiverse/cordis/blob/main/packages/core/src/fiber.ts">Fiber</a> 源码。
+      </p>
+
+      <footer>
+        有任何一步不清楚，可以直接向当前 Agent 追问。完成测试后，再回到文章把 Mini Context 与 Cordis Fiber 逐项对应。
+      </footer>
+    </main>
+  </body>
+</html>
