@@ -1,21 +1,20 @@
 export type Disposer = () => void;
 export type Effect = () => void | Disposer;
 
-export class Context {
-  #active = true;
-  #disposables: Disposer[] = [];
+export type Context = {
   readonly parent?: Context;
+  readonly active: boolean;
+  effect(setup: Effect): Disposer;
+  plugin(apply: (ctx: Context) => void): Context;
+  dispose(): void;
+};
 
-  constructor(parent?: Context) {
-    this.parent = parent;
-  }
+export function createContext(parent?: Context): Context {
+  let active = true;
+  const disposables: Disposer[] = [];
 
-  get active() {
-    return this.#active;
-  }
-
-  effect(setup: Effect): Disposer {
-    if (!this.#active) {
+  function effect(setup: Effect): Disposer {
+    if (!active) {
       throw new Error("cannot create effect on inactive context");
     }
 
@@ -24,20 +23,20 @@ export class Context {
       throw new TypeError("effect must return a disposer or nothing");
     }
 
-    let active = true;
+    let disposed = false;
     const dispose = () => {
-      if (!active) return;
-      active = false;
+      if (disposed) return;
+      disposed = true;
       teardown?.();
     };
 
-    this.#disposables.push(dispose);
+    disposables.push(dispose);
     return dispose;
   }
 
-  plugin(apply: (ctx: Context) => void): Context {
-    const child = new Context(this);
-    const disposeChild = this.effect(() => () => child.dispose());
+  function plugin(apply: (ctx: Context) => void): Context {
+    const child = createContext(context);
+    const disposeChild = effect(() => () => child.dispose());
 
     try {
       apply(child);
@@ -49,12 +48,12 @@ export class Context {
     return child;
   }
 
-  dispose() {
-    if (!this.#active) return;
-    this.#active = false;
+  function dispose() {
+    if (!active) return;
+    active = false;
 
     const errors: unknown[] = [];
-    for (const dispose of this.#disposables.splice(0).reverse()) {
+    for (const dispose of disposables.splice(0).reverse()) {
       try {
         dispose();
       } catch (error) {
@@ -66,4 +65,16 @@ export class Context {
       throw new AggregateError(errors, "failed to dispose context");
     }
   }
+
+  const context: Context = {
+    parent,
+    get active() {
+      return active;
+    },
+    effect,
+    plugin,
+    dispose,
+  };
+
+  return context;
 }

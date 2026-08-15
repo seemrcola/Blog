@@ -44,6 +44,10 @@ apply()
 
 plugin.dispose()</code></pre>
 
+      <p>
+        Mini 版使用函数式的 <code>createContext()</code> 工厂：状态藏在闭包里，对外只返回 <code>effect</code>、<code>plugin</code> 和 <code>dispose</code>。
+      </p>
+
       <div class="callout">
         Context 不是自动发现副作用的垃圾回收器。只有通过 <code>ctx.effect()</code> 或基于它实现的 API 注册的资源，才会归属于插件生命周期。
       </div>
@@ -87,7 +91,7 @@ plugin.dispose()</code></pre>
       </p>
 
       <footer>
-        有任何一步不清楚，可以直接向当前 Agent 追问。完成测试后，再回到文章把 Mini Context 与 Cordis Fiber 逐项对应。
+        有任何一步不清楚，可以直接向当前 Agent 追问。完成测试后，再回到文章把函数式 Mini Context 与 Cordis Fiber 逐项对应。
       </footer>
     </main>
   </body>

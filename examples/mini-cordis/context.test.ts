@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { Context } from "./context.ts";
+import { createContext } from "./context.ts";
 
 test("disposing a plugin removes the effects it registered", () => {
-  const root = new Context();
+  const root = createContext();
   const bus = new EventEmitter();
   let messages = 0;
 
@@ -25,7 +25,7 @@ test("disposing a plugin removes the effects it registered", () => {
 });
 
 test("disposing a parent also disposes nested plugins in reverse order", () => {
-  const root = new Context();
+  const root = createContext();
   const order: string[] = [];
 
   root.plugin((parent) => {
@@ -44,7 +44,7 @@ test("disposing a parent also disposes nested plugins in reverse order", () => {
 });
 
 test("one failed disposer does not prevent the remaining cleanup", () => {
-  const ctx = new Context();
+  const ctx = createContext();
   const order: string[] = [];
 
   ctx.effect(() => () => order.push("first"));
@@ -58,7 +58,7 @@ test("one failed disposer does not prevent the remaining cleanup", () => {
 });
 
 test("an inactive context cannot create new effects", () => {
-  const ctx = new Context();
+  const ctx = createContext();
 
   ctx.dispose();
 

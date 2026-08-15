@@ -13,7 +13,8 @@
 
       <h2>所有权链</h2>
 
-      <pre><code>ctx.plugin(plugin)
+      <pre><code>const root = createContext()
+root.plugin(plugin)
   → Registry 创建 Fiber
   → Fiber 创建 child Context
   → plugin(childCtx)
@@ -28,7 +29,7 @@
   return () => release(resource)
 })
 
-const child = ctx.plugin((childCtx) => {
+const child = root.plugin((childCtx) => {
   // 注册到 childCtx 的生命周期
 })
 
