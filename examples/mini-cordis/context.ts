@@ -1,20 +1,16 @@
 export type Disposer = () => void;
 export type Effect = () => void | Disposer;
 
-export type Context = {
-  readonly parent?: Context;
-  readonly active: boolean;
-  effect(setup: Effect): Disposer;
-  plugin(apply: (ctx: Context) => void): Context;
-  dispose(): void;
-};
+export class Context {
+  private isActive = true;
+  private disposables: Disposer[] = [];
 
-export function createContext(parent?: Context): Context {
-  let active = true;
-  const disposables: Disposer[] = [];
+  get active(): boolean {
+    return this.isActive;
+  }
 
-  function effect(setup: Effect): Disposer {
-    if (!active) {
+  effect(setup: Effect): Disposer {
+    if (!this.isActive) {
       throw new Error("cannot create effect on inactive context");
     }
 
@@ -30,13 +26,13 @@ export function createContext(parent?: Context): Context {
       teardown?.();
     };
 
-    disposables.push(dispose);
+    this.disposables.push(dispose);
     return dispose;
   }
 
-  function plugin(apply: (ctx: Context) => void): Context {
-    const child = createContext(context);
-    const disposeChild = effect(() => () => child.dispose());
+  plugin(apply: (ctx: Context) => void): Context {
+    const child = new Context();
+    const disposeChild = this.effect(() => () => child.dispose());
 
     try {
       apply(child);
@@ -48,12 +44,12 @@ export function createContext(parent?: Context): Context {
     return child;
   }
 
-  function dispose() {
-    if (!active) return;
-    active = false;
+  dispose(): void {
+    if (!this.isActive) return;
+    this.isActive = false;
 
     const errors: unknown[] = [];
-    for (const dispose of disposables.splice(0).reverse()) {
+    for (const dispose of this.disposables.splice(0).reverse()) {
       try {
         dispose();
       } catch (error) {
@@ -61,20 +57,8 @@ export function createContext(parent?: Context): Context {
       }
     }
 
-    if (errors.length) {
+    if (errors.length > 0) {
       throw new AggregateError(errors, "failed to dispose context");
     }
   }
-
-  const context: Context = {
-    parent,
-    get active() {
-      return active;
-    },
-    effect,
-    plugin,
-    dispose,
-  };
-
-  return context;
 }

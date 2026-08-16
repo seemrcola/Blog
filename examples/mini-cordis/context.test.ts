@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { createContext } from "./context.ts";
+import { Context } from "./context.ts";
 
 test("disposing a plugin removes the effects it registered", () => {
-  const root = createContext();
+  const root = new Context();
   const bus = new EventEmitter();
   let messages = 0;
 
+  // listener 注册到 child，而不是 root；plugin.dispose() 应该只清理这个插件。
   const plugin = root.plugin((ctx) => {
     const listener = () => messages++;
     ctx.effect(() => {
@@ -24,27 +25,28 @@ test("disposing a plugin removes the effects it registered", () => {
   assert.equal(bus.listenerCount("message"), 0);
 });
 
-test("disposing a parent also disposes nested plugins in reverse order", () => {
-  const root = createContext();
+test("parent disposal follows the plugin ownership tree in reverse order", () => {
+  const root = new Context();
   const order: string[] = [];
 
-  root.plugin((parent) => {
-    parent.effect(() => () => order.push("parent:first"));
+  // A 的 dispose 被登记到 root，B 的 dispose 被登记到 A。
+  root.plugin((pluginA) => {
+    pluginA.effect(() => () => order.push("A:listener"));
 
-    parent.plugin((child) => {
-      child.effect(() => () => order.push("child"));
+    pluginA.plugin((pluginB) => {
+      pluginB.effect(() => () => order.push("B:timer"));
     });
 
-    parent.effect(() => () => order.push("parent:last"));
+    pluginA.effect(() => () => order.push("A:last"));
   });
 
   root.dispose();
 
-  assert.deepEqual(order, ["parent:last", "child", "parent:first"]);
+  assert.deepEqual(order, ["A:last", "B:timer", "A:listener"]);
 });
 
 test("one failed disposer does not prevent the remaining cleanup", () => {
-  const ctx = createContext();
+  const ctx = new Context();
   const order: string[] = [];
 
   ctx.effect(() => () => order.push("first"));
@@ -58,7 +60,7 @@ test("one failed disposer does not prevent the remaining cleanup", () => {
 });
 
 test("an inactive context cannot create new effects", () => {
-  const ctx = createContext();
+  const ctx = new Context();
 
   ctx.dispose();
 

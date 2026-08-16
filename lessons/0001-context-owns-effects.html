@@ -45,12 +45,26 @@ apply()
 plugin.dispose()</code></pre>
 
       <p>
-        Mini 版使用函数式的 <code>createContext()</code> 工厂：状态藏在闭包里，对外只返回 <code>effect</code>、<code>plugin</code> 和 <code>dispose</code>。
+        Mini 版使用一个 <code>Context</code> 类：实例保存自己的 active 状态和 disposer 列表，对外只提供 <code>effect</code>、<code>plugin</code> 和 <code>dispose</code>。
       </p>
 
       <div class="callout">
         Context 不是自动发现副作用的垃圾回收器。只有通过 <code>ctx.effect()</code> 或基于它实现的 API 注册的资源，才会归属于插件生命周期。
       </div>
+
+      <h2>树从哪里来</h2>
+
+      <pre><code>const root = new Context()
+
+root.plugin((pluginA) => {
+  pluginA.plugin((pluginB) => {
+    pluginB.effect(() => () => offBTimer())
+  })
+})</code></pre>
+
+      <p>
+        每次 <code>plugin()</code> 都先创建 child，再把 <code>child.dispose()</code> 登记为父 Context 的 effect。父作用域持有子作用域的 disposer，这一条边就是插件树；不需要 <code>children</code> 数组或 <code>parent</code> 字段。
+      </p>
 
       <h2>检索练习</h2>
 
@@ -91,7 +105,7 @@ plugin.dispose()</code></pre>
       </p>
 
       <footer>
-        有任何一步不清楚，可以直接向当前 Agent 追问。完成测试后，再回到文章把函数式 Mini Context 与 Cordis Fiber 逐项对应。
+        有任何一步不清楚，可以直接向当前 Agent 追问。完成测试后，再回到文章把 class Mini Context 与 Cordis Fiber 逐项对应。
       </footer>
     </main>
   </body>

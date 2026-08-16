@@ -13,13 +13,13 @@
 
       <h2>所有权链</h2>
 
-      <pre><code>const root = createContext()
-root.plugin(plugin)
-  → Registry 创建 Fiber
-  → Fiber 创建 child Context
+      <pre><code>root.plugin(plugin)
+  → create child Context
+  → root.effect(() => () => child.dispose())
   → plugin(childCtx)
   → childCtx.effect(...) 收集 disposer
-  → fiber.dispose()
+  → root.dispose()
+  → child.dispose()
   → 逆序执行 disposer</code></pre>
 
       <h2>三个核心操作</h2>
@@ -39,6 +39,7 @@ child.dispose()</code></pre>
 
       <ul>
         <li>Context 只管理登记过的副作用。</li>
+        <li>Mini 版的树由“父 disposer 持有子 dispose”构造，不需要 <code>parent</code> 字段。</li>
         <li>每个子插件拥有独立 Context/Fiber。</li>
         <li>父 Fiber 持有子 Fiber 的 disposer。</li>
         <li>卸载时逆序取出 disposer，即使某项失败也应继续清理。</li>

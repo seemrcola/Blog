@@ -1,391 +1,55 @@
 ---
-title: "为什么 Cordis 的 Context 能解决插件卸载"
-description: "从一个真实的插件卸载问题出发，用函数式 Mini Context 理解 Cordis 的 effect、Fiber 和生命周期所有权。"
+title: "插件卸载最难的不是清理，而是知道该清理什么"
+description: "从一个会留下幽灵监听器的插件开始，用 class 语法实现 Mini Context，再看 Cordis 如何用 Fiber 管理副作用的生命周期。"
 date: 2026-08-15
 tags: [JavaScript, Cordis, Agent]
 status: in-progress
 ---
 
-最近 `deepseek-harness` 很火。我在了解它的实现时发现，Harness 使用了 Cordis，于是顺着这条线去了解了一下 Cordis。
+插件热更新时，最让人困惑的 bug 往往不是“新插件没有生效”，而是旧插件还在生效：
 
-真正让我感兴趣的不是“它使用了哪些服务”，而是 Cordis 如何处理插件卸载：一个插件注册了事件监听器、定时器、服务和子插件以后，框架怎样知道这些资源属于谁，并在插件离开时完整撤销？
+- 同一条消息被打印两次；
+- 定时任务越跑越多；
+- 服务已经切换，旧服务却还在响应。
 
-这篇文章只解决一个核心问题：**Context 如何让插件的副作用拥有清晰的生命周期。**
+这些资源都能清理。`off()` 可以移除监听器，`clearInterval()` 可以停止定时器，问题是：**卸载时，框架怎么知道哪些资源属于这个插件？**
 
-我们会按这条顺序实现：
+这正是 Cordis 的 Context 要解决的问题。它不是一个会自动扫描 JavaScript 的垃圾回收器，而是一条明确的所有权链：插件通过 Context 登记副作用，Context 在卸载时执行对应的 disposer。
 
-```txt
-卸载问题
-  → 副作用所有权
-  → ctx.effect()
-  → 函数式 createContext()
-  → 父子 Context
-  → Cordis 的 Fiber
-```
+本文只讲清楚这条链，并用一个小型的 `Context` 类把它实现出来。读完后，你应该能回答两个问题：
 
-服务、Proxy、`inject` 和 `isolate()` 先不展开。它们建立在同一条生命周期链路之上，等 Context 的作用域模型清楚以后再看会更容易。
+1. 为什么 `plugin()` 可以递归卸载子插件？
+2. 为什么 Cordis 的 `ctx.on()`、`ctx.provide()` 能跟着插件一起消失？
 
-本文主要参考 Cordis 上游的 [`context.ts`](https://github.com/cordiverse/cordis/blob/main/packages/core/src/context.ts)、[`registry.ts`](https://github.com/cordiverse/cordis/blob/main/packages/core/src/registry.ts)、[`fiber.ts`](https://github.com/cordiverse/cordis/blob/main/packages/core/src/fiber.ts)、[`reflect.ts`](https://github.com/cordiverse/cordis/blob/main/packages/core/src/reflect.ts) 和 [`utils.ts`](https://github.com/cordiverse/cordis/blob/main/packages/core/src/utils.ts)。DeepSeek Harness 是发现 Cordis 的入口，下面的分析以 Cordis 本身为主。
+## 先制造一个幽灵监听器
 
-## 先从卸载失败开始
-
-假设插件只是一个函数，拿到应用对象后注册几种资源：
+先看没有生命周期管理的插件：
 
 ```ts
 function messagePlugin(app: App) {
-  app.events.on("message", handleMessage);
+  app.bus.on("message", handleMessage);
   setInterval(refreshCache, 1000);
-  app.commands.set("search", searchCommand);
 }
 
 messagePlugin(app);
 ```
 
-加载没有难度。问题出现在卸载：
+加载很简单。卸载呢？下面的函数没有足够的信息：
 
 ```ts
 unload(messagePlugin);
 ```
 
-这个 `unload()` 没有足够的信息回答下面的问题：
+它不知道哪个 listener 是这次调用注册的，也不知道哪个 interval 应该停止。即使我们把 `off()` 和 `clearInterval()` 写对了，所有权信息已经丢了。
 
-- 哪个 listener 是这个插件注册的？
-- 哪个 interval 应该被 `clearInterval()`？
-- `search` command 是这个插件创建的，还是其他插件创建的？
-- 插件调用的 helper 有没有继续创建资源？
+所以问题不是“缺少清理 API”，而是“资源没有归属”。如果一个插件只能通过全局对象做事，资源就很容易变成孤儿。
 
-JavaScript 当然提供了 `off()`、`clearInterval()` 和 `delete()`。缺少的不是清理 API，而是**副作用和插件实例之间的所有权关系**。
+## 先写出我们想要的用法
 
-## Context 的一句话答案
-
-Cordis 给每个插件一个专属的 `ctx`。插件不直接把副作用散落到全局对象，而是通过这个 `ctx` 登记可撤销操作：
+一个可卸载的插件应该把资源登记到自己的作用域：
 
 ```ts
-function messagePlugin(ctx: Context) {
-  ctx.effect(() => {
-    const timer = setInterval(refreshCache, 1000);
-
-    return () => clearInterval(timer);
-  });
-}
-```
-
-`ctx.effect(setup)` 做两件事：
-
-1. 立即执行 `setup`，让插件创建资源。
-2. 保存 `setup` 返回的 disposer，等 Context 卸载时调用它。
-
-因此卸载不再需要重新分析插件代码，而只需要执行这个插件登记过的 disposer：
-
-```txt
-ctx.effect(setup)
-  → setup 创建资源
-  → setup 返回 disposer
-  → 当前插件保存 disposer
-  → 插件卸载时调用 disposer
-```
-
-这就是 Context 最重要的含义：**它是插件拿到的 effect scope，也是副作用的所有权边界。**
-
-这里有一个必须说清楚的限制：Context 不是垃圾回收器，不能自动发现任意 JavaScript 副作用。
-
-下面的定时器不受管理：
-
-```ts
-function plugin(ctx: Context) {
-  setInterval(refreshCache, 1000);
-}
-```
-
-必须显式登记：
-
-```ts
-function plugin(ctx: Context) {
-  ctx.effect(() => {
-    const timer = setInterval(refreshCache, 1000);
-    return () => clearInterval(timer);
-  });
-}
-```
-
-所以更准确的说法是：**Cordis 能清理通过 `effect`，或通过内部使用 `effect` 的 API 注册的副作用。**
-
-## 先确定 Mini 版的边界
-
-为了看清核心机制，Mini 版只实现三个操作：
-
-```ts
-const root = createContext();
-
-const plugin = root.plugin((ctx) => {
-  ctx.effect(() => {
-    // 创建资源
-    return () => {
-      // 撤销资源
-    };
-  });
-});
-
-plugin.dispose();
-```
-
-- `effect(setup)`：登记一个可撤销副作用。
-- `plugin(apply)`：创建一个拥有独立生命周期的子 Context。
-- `dispose()`：逆序执行当前 Context 的所有 disposer。
-
-这里故意不用 `class`。函数式版本把状态放在 `createContext()` 的闭包里，返回一个只暴露生命周期操作的对象：
-
-```txt
-createContext()
-  → 闭包保存 active / disposables
-  → 返回 effect / plugin / dispose
-```
-
-这不是为了宣称 Cordis 内部也是函数式的。真实 Cordis 的 Fiber 是类；我们只是用闭包把同一个所有权模型压缩成最小实现。
-
-## 第一步：用闭包保存 effect
-
-先定义两个类型：setup 可以不返回任何东西，也可以返回 disposer。
-
-```ts
-export type Disposer = () => void;
-export type Effect = () => void | Disposer;
-```
-
-然后写 `createContext()` 的状态：
-
-```ts
-export function createContext(parent?: Context): Context {
-  let active = true;
-  const disposables: Disposer[] = [];
-```
-
-`active` 防止已经卸载的 Context 继续创建资源；`disposables` 保存当前作用域拥有的清理函数。
-
-接着实现 `effect()`：
-
-```ts
-  function effect(setup: Effect): Disposer {
-    if (!active) {
-      throw new Error("cannot create effect on inactive context");
-    }
-
-    const teardown = setup();
-    if (teardown !== undefined && typeof teardown !== "function") {
-      throw new TypeError("effect must return a disposer or nothing");
-    }
-
-    let disposed = false;
-    const dispose = () => {
-      if (disposed) return;
-      disposed = true;
-      teardown?.();
-    };
-
-    disposables.push(dispose);
-    return dispose;
-  }
-```
-
-这里有两个容易忽略的细节。
-
-第一，`setup()` 在登记时立即执行。插件调用 `ctx.effect()` 的时刻，就是资源创建的时刻。
-
-第二，返回的 `dispose()` 是幂等的。插件可以主动清理某个资源，之后 Context 整体卸载时再次遇到同一个 disposer 也不会重复执行：
-
-```ts
-const dispose = ctx.effect(() => {
-  const timer = setInterval(refresh, 1000);
-  return () => clearInterval(timer);
-});
-
-dispose();
-dispose(); // no-op
-```
-
-## 第二步：逆序执行 disposer
-
-资源通常按依赖顺序创建：
-
-```txt
-database
-  → repository
-    → command
-```
-
-拆除时自然应该反过来：
-
-```txt
-command
-  → repository
-    → database
-```
-
-所以 `dispose()` 先关闭 Context，再取出 disposer 的副本并反转：
-
-```ts
-  function dispose() {
-    if (!active) return;
-    active = false;
-
-    const errors: unknown[] = [];
-    for (const dispose of disposables.splice(0).reverse()) {
-      try {
-        dispose();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-
-    if (errors.length) {
-      throw new AggregateError(errors, "failed to dispose context");
-    }
-  }
-```
-
-为什么不遇到第一个错误就停止？因为一个资源清理失败，不应该让其他 listener、timer 和 service 永远留在系统里。先完成全部清理，最后再把错误聚合抛出，卸载才不会因为一个坏 disposer 变成半完成状态。
-
-## 第三步：让插件拥有子 Context
-
-单个全局 Context 仍然不够。如果所有插件共享同一个 disposer 数组，框架只能关闭整个应用，不能只卸载某一个插件。
-
-`plugin()` 要做的事情很少：
-
-1. 创建 child Context。
-2. 把 `child.dispose` 登记到父 Context。
-3. 执行插件函数，让它使用 child Context 注册 effect。
-
-```ts
-  function plugin(apply: (ctx: Context) => void): Context {
-    const child = createContext(context);
-    const disposeChild = effect(() => () => child.dispose());
-
-    try {
-      apply(child);
-    } catch (error) {
-      disposeChild();
-      throw error;
-    }
-
-    return child;
-  }
-```
-
-这里的关键不是多了一个 `parent` 属性，而是这行关系：
-
-```ts
-effect(() => () => child.dispose());
-```
-
-子 Context 自己就是父 Context 的一个 effect。于是插件树自动变成生命周期树：
-
-```txt
-root Context
-├─ plugin A Context
-│  ├─ listener
-│  └─ plugin A.1 Context
-│     └─ timer
-└─ plugin B Context
-   └─ command
-```
-
-调用 `pluginA.dispose()` 只会卸载 A 以及 A.1；调用 `root.dispose()` 则会递归卸载整棵树。我们不需要另外写树遍历，因为子 Context 已经登记在父 Context 的 disposer 列表里。
-
-## 完整的函数式 Mini Context
-
-把前面三步合在一起，得到可运行的实现：
-
-```ts
-export type Disposer = () => void;
-export type Effect = () => void | Disposer;
-
-export type Context = {
-  readonly parent?: Context;
-  readonly active: boolean;
-  effect(setup: Effect): Disposer;
-  plugin(apply: (ctx: Context) => void): Context;
-  dispose(): void;
-};
-
-export function createContext(parent?: Context): Context {
-  let active = true;
-  const disposables: Disposer[] = [];
-
-  function effect(setup: Effect): Disposer {
-    if (!active) {
-      throw new Error("cannot create effect on inactive context");
-    }
-
-    const teardown = setup();
-    if (teardown !== undefined && typeof teardown !== "function") {
-      throw new TypeError("effect must return a disposer or nothing");
-    }
-
-    let disposed = false;
-    const dispose = () => {
-      if (disposed) return;
-      disposed = true;
-      teardown?.();
-    };
-
-    disposables.push(dispose);
-    return dispose;
-  }
-
-  function plugin(apply: (ctx: Context) => void): Context {
-    const child = createContext(context);
-    const disposeChild = effect(() => () => child.dispose());
-
-    try {
-      apply(child);
-    } catch (error) {
-      disposeChild();
-      throw error;
-    }
-
-    return child;
-  }
-
-  function dispose() {
-    if (!active) return;
-    active = false;
-
-    const errors: unknown[] = [];
-    for (const dispose of disposables.splice(0).reverse()) {
-      try {
-        dispose();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-
-    if (errors.length) {
-      throw new AggregateError(errors, "failed to dispose context");
-    }
-  }
-
-  const context: Context = {
-    parent,
-    get active() {
-      return active;
-    },
-    effect,
-    plugin,
-    dispose,
-  };
-
-  return context;
-}
-```
-
-完整代码位于 [`examples/mini-cordis/context.ts`](../../examples/mini-cordis/context.ts)。它的状态没有挂在实例字段上，而是被 `createContext()` 的闭包保护；返回对象只提供操作入口。
-
-## 用测试确认卸载行为
-
-先测最直观的事件监听器：
-
-```ts
-const root = createContext();
+const root = new Context();
 const bus = new EventEmitter();
 let messages = 0;
 
@@ -403,239 +67,371 @@ plugin.dispose();
 bus.emit("message");
 
 assert.equal(messages, 1);
-assert.equal(bus.listenerCount("message"), 0);
 ```
 
-第二次 `emit()` 没有再触发 listener，说明插件卸载后没有留下事件监听器。
+这段代码有一个很重要的约定：
 
-再看父子插件的清理顺序：
+```txt
+setup() 现在执行，创建资源
+setup() 返回 disposer
+disposer 归当前 Context 所有
+Context.dispose() 时执行 disposer
+```
+
+`plugin.dispose()` 之后，第二次 `emit()` 不再触发 listener。我们不需要让框架猜测资源，只需要要求插件在创建资源时登记它。
+
+## 三个动作，刚好够用
+
+Mini 版本只保留三个动作：
+
+| 动作 | 作用 |
+| --- | --- |
+| `effect(setup)` | 创建资源，并登记它的清理函数 |
+| `plugin(apply)` | 创建独立的子 Context |
+| `dispose()` | 按逆序执行当前 Context 拥有的清理函数 |
+
+这里选择 `class`，不是因为 class 更“高级”，而是因为这个对象确实有两类稳定状态：是否仍然 active，以及它拥有的 disposer 列表。把状态和操作放在同一个对象里，阅读实现时可以直接看到每个方法操作的边界。
+
+## 第一步：让 Context 拥有 effect
+
+先定义两个类型：
 
 ```ts
-const root = createContext();
-const order: string[] = [];
+export type Disposer = () => void;
+export type Effect = () => void | Disposer;
+```
 
-root.plugin((parent) => {
-  parent.effect(() => () => order.push("parent:first"));
+`Effect` 的外层函数是 setup，返回值是可选的 disposer。`effect()` 的核心实现只有四件事：检查状态、执行 setup、包装成幂等函数、保存到列表。
 
-  parent.plugin((child) => {
-    child.effect(() => () => order.push("child"));
+```ts
+export class Context {
+  private isActive = true;
+  private disposables: Disposer[] = [];
+
+  get active(): boolean {
+    return this.isActive;
+  }
+
+  effect(setup: Effect): Disposer {
+    if (!this.isActive) {
+      throw new Error("cannot create effect on inactive context");
+    }
+
+    const teardown = setup();
+    if (teardown !== undefined && typeof teardown !== "function") {
+      throw new TypeError("effect must return a disposer or nothing");
+    }
+
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      teardown?.();
+    };
+
+    this.disposables.push(dispose);
+    return dispose;
+  }
+```
+
+为什么要多包一层 `dispose`？因为资源既可以随插件整体卸载，也可以提前单独卸载：
+
+```ts
+const disposeTimer = ctx.effect(() => {
+  const timer = setInterval(refreshCache, 1000);
+  return () => clearInterval(timer);
+});
+
+disposeTimer();
+disposeTimer(); // 第二次什么也不做
+```
+
+这个幂等性让 disposer 可以安全地同时被业务代码和 Context 调用。
+
+## 第二步：为什么必须逆序卸载
+
+资源通常按依赖顺序创建：
+
+```txt
+database → repository → command
+```
+
+拆除时应该反过来：
+
+```txt
+command → repository → database
+```
+
+因此 `dispose()` 会先关闭 Context，取走当前列表，再反转执行：
+
+```ts
+  dispose(): void {
+    if (!this.isActive) return;
+    this.isActive = false;
+
+    const errors: unknown[] = [];
+    for (const dispose of this.disposables.splice(0).reverse()) {
+      try {
+        dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "failed to dispose context");
+    }
+  }
+}
+```
+
+这里有两个边界值得记住：
+
+- 先把 `isActive` 设为 `false`，卸载期间不能继续创建新 effect；
+- 某个 disposer 抛错时，其他 disposer 仍然要继续执行，最后再报告错误。
+
+## 第三步：用一条 disposer 边连接父子插件
+
+如果所有插件共享一个 disposer 数组，只能关闭整个应用，不能单独关闭某个插件。因此每次 `plugin()` 都要创建一个新的 Context。
+
+关键不是维护 `children` 数组，而是把子 Context 的卸载函数登记到父 Context：
+
+```ts
+  plugin(apply: (ctx: Context) => void): Context {
+    const child = new Context();
+    const disposeChild = this.effect(() => () => child.dispose());
+
+    try {
+      apply(child);
+    } catch (error) {
+      disposeChild();
+      throw error;
+    }
+
+    return child;
+  }
+```
+
+这一行就是整棵树的关键：
+
+```ts
+this.effect(() => () => child.dispose());
+```
+
+外层函数现在执行，内层函数以后执行。于是父 Context 的 disposer 列表里出现了一条边：
+
+```txt
+parent.disposables
+  └─ disposeChild() → child.dispose()
+```
+
+父插件卸载时，这条边会递归进入子插件。我们没有遍历树，因为树已经被编码进了 disposer 的所有权关系。
+
+## 看一次真实的卸载顺序
+
+```ts
+const root = new Context();
+
+root.plugin((pluginA) => {
+  pluginA.effect(() => () => offAListener());
+
+  pluginA.plugin((pluginB) => {
+    pluginB.effect(() => () => offBTimer());
   });
 
-  parent.effect(() => () => order.push("parent:last"));
+  pluginA.effect(() => () => offALastResource());
 });
 
 root.dispose();
+```
 
+注册完成后，A 的列表是：
+
+```txt
+[offAListener, disposeB, offALastResource]
+```
+
+所以卸载顺序是：
+
+```txt
+offALastResource()
+  → disposeB()
+    → offBTimer()
+  → offAListener()
+```
+
+注意这里的细节：B 不是被 root 找到的，B 是 A 的一个 effect。父子插件关系和副作用关系使用同一种机制，这就是实现保持简单的原因。
+
+## 完整的 Mini Context
+
+把三个动作合起来，完整代码只有一个类：
+
+```ts
+export type Disposer = () => void;
+export type Effect = () => void | Disposer;
+
+export class Context {
+  private isActive = true;
+  private disposables: Disposer[] = [];
+
+  get active(): boolean {
+    return this.isActive;
+  }
+
+  effect(setup: Effect): Disposer {
+    if (!this.isActive) {
+      throw new Error("cannot create effect on inactive context");
+    }
+
+    const teardown = setup();
+    if (teardown !== undefined && typeof teardown !== "function") {
+      throw new TypeError("effect must return a disposer or nothing");
+    }
+
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      teardown?.();
+    };
+
+    this.disposables.push(dispose);
+    return dispose;
+  }
+
+  plugin(apply: (ctx: Context) => void): Context {
+    const child = new Context();
+    const disposeChild = this.effect(() => () => child.dispose());
+
+    try {
+      apply(child);
+    } catch (error) {
+      disposeChild();
+      throw error;
+    }
+
+    return child;
+  }
+
+  dispose(): void {
+    if (!this.isActive) return;
+    this.isActive = false;
+
+    const errors: unknown[] = [];
+    for (const dispose of this.disposables.splice(0).reverse()) {
+      try {
+        dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "failed to dispose context");
+    }
+  }
+}
+```
+
+完整文件在 [`examples/mini-cordis/context.ts`](../../examples/mini-cordis/context.ts)。实现刻意没有加入服务容器、依赖注入或异步状态机，因为它们都不是理解“副作用属于谁”的前置条件。
+
+## 用测试确认模型
+
+第一组测试确认插件自己的监听器会被移除：
+
+```ts
+const root = new Context();
+const bus = new EventEmitter();
+let messages = 0;
+
+const plugin = root.plugin((ctx) => {
+  const listener = () => messages++;
+  ctx.effect(() => {
+    bus.on("message", listener);
+    return () => bus.off("message", listener);
+  });
+});
+
+bus.emit("message");
+plugin.dispose();
+bus.emit("message");
+
+assert.equal(messages, 1);
+assert.equal(bus.listenerCount("message"), 0);
+```
+
+第二组测试确认父子关系和逆序清理：
+
+```ts
 assert.deepEqual(order, [
-  "parent:last",
-  "child",
-  "parent:first",
+  "A:last",
+  "B:timer",
+  "A:listener",
 ]);
 ```
 
-为什么是这个顺序？父 Context 的 disposer 按注册顺序是：
-
-```txt
-parent:first
-child Context
-parent:last
-```
-
-整体卸载时逆序执行，所以先是 `parent:last`，然后进入 child Context，最后才是 `parent:first`。
-
-当前测试还覆盖两个边界：一个 disposer 抛错时其他 disposer 仍然继续执行；Context 进入 inactive 后不能再创建新的 effect。运行：
+还应测试两个边界：一个 disposer 失败时其他 disposer 仍会运行，以及 Context 进入 inactive 后不能再创建 effect。运行：
 
 ```bash
 node --test examples/mini-cordis/context.test.ts
 ```
 
-## 回到 Cordis：Context 为什么看起来很薄
+先预测顺序，再运行测试。这个小练习比背诵 `reverse()` 更有用：你需要从“B 是 A 的一个 disposer”推导出结果。
 
-到这里再读 Cordis 源码，重点就不再是“Context 里有哪些属性”，而是追踪一次插件挂载时所有权如何传递。
+## 从 Mini 版回到 Cordis
 
-### 1. Registry 为插件挂载创建 Fiber
+现在再读 Cordis 源码，可以把名字对应起来，而不会先迷失在 API 数量里。重点参考 Cordis 的 [`context.ts`](https://github.com/cordiverse/cordis/blob/main/packages/core/src/context.ts)、[`registry.ts`](https://github.com/cordiverse/cordis/blob/main/packages/core/src/registry.ts) 和 [`fiber.ts`](https://github.com/cordiverse/cordis/blob/main/packages/core/src/fiber.ts)。
 
-Cordis 的 `RegistryService.plugin()` 会为一次具体的插件挂载创建 `Fiber`：
+| Mini 版 | Cordis | 职责 |
+| --- | --- | --- |
+| `Context` 实例 | 插件拿到的 `Context` | 提供当前插件的作用域入口 |
+| `disposables` | `Fiber` 的 disposable list | 保存可撤销副作用 |
+| `effect()` | `Fiber.effect()` | 登记 setup 返回的 disposer |
+| `plugin()` 创建 child | `Registry` 创建 Fiber 并派生 Context | 为一次插件挂载建立独立生命周期 |
+| `dispose()` | Fiber 的卸载流程 | 逆序执行并处理卸载状态 |
 
-```ts
-const fiber = new Fiber(
-  this.ctx,
-  config,
-  Inject.resolve(plugin.inject),
-  runtime,
-  getOuterStack,
-);
-```
+真实 Cordis 的 Context 看起来很薄，是因为真正的运行时状态在 Fiber 里。Context 负责让插件拿到入口；Fiber 负责记住这次插件实例拥有哪些副作用，以及它当前处于什么状态。
 
-同一个插件函数可以被多次挂载，所以 Registry 管理插件运行时，Fiber 表示其中一次具体实例。
-
-### 2. Fiber 派生插件专属 Context
-
-Fiber 构造时会从父 Context 派生一个子 Context，并把当前 Fiber 绑定进去：
-
-```ts
-this.ctx = this.context = parent.extend({ fiber: this });
-```
-
-插件最终拿到的是这个绑定了 Fiber 的 Context。后续 API 只要读取 `ctx.fiber`，就能知道这次操作归属于哪个插件实例。
-
-### 3. `ctx.effect()` 的真正拥有者是 Fiber
-
-Cordis 将 Fiber 的 `effect` 暴露到 Context：
-
-```ts
-export interface Context extends Pick<Fiber, "effect"> {
-  fiber: Fiber;
-}
-```
-
-反射层再把它 mixin 到 `ctx.effect`：
-
-```ts
-this.mixin("fiber", ["runtime", "effect"]);
-```
-
-所以插件写的是：
-
-```ts
-ctx.effect(setup);
-```
-
-真正保存 disposer 和状态的是当前 Fiber。可以把两者的分工记成：
+`ctx.on()` 和 `ctx.provide()` 之所以能自动卸载，也不是 Context 在扫描监听器或服务表，而是这些 API 在内部把撤销动作登记到了当前 Fiber：
 
 ```txt
-Context：插件使用的作用域入口
-Fiber：作用域背后的状态机和 disposer 所有者
+ctx.on()       ┐
+ctx.provide()  ├─→ effect() → 当前 Fiber
+ctx.plugin()   ┘
 ```
 
-### 4. 子 Fiber 归属于父 Fiber
+因此最值得记住的不是某个 API，而是这条规则：
 
-Cordis 创建子插件时，会把当前 Fiber 的卸载逻辑注册到父 Fiber 的 effect 中。Mini 版对应的是：
+> 所有可撤销的副作用，都必须归属于一个 Context；在 Cordis 内部，它最终归属于当前 Fiber。
 
-```ts
-effect(() => () => child.dispose());
-```
+## 能解决什么，不能解决什么
 
-因此父插件卸载时，子插件自然会进入卸载流程，插件树也就变成了生命周期树。
+Context 可以管理：
 
-### 5. Fiber 逆序清理 effects
+- 事件监听器、定时器和服务注册；
+- helper 创建的资源，只要 helper 使用了当前 Context；
+- 子插件及其全部副作用；
+- 可重复调用的单个 disposer。
 
-Fiber 卸载时会清空 disposables，并执行清理函数：
+Context 不会自动管理：
 
-```ts
-await Promise.all(
-  this._disposables.clear().map(async (dispose) => {
-    try {
-      await dispose();
-    } catch (reason) {
-      this.ctx.logger.error(reason);
-    }
-  }),
-);
-```
+- 没有通过 `effect()` 登记的原始副作用；
+- 已经写入外部数据库的数据；
+- 已经发出的网络请求或其他不可逆操作；
+- disposer 自己没有实现完整清理的资源。
 
-而 `DisposableList.clear()` 会返回逆序列表：
+它管理的是**可撤销副作用的所有权**，不是把所有操作变成可逆操作。
 
-```ts
-clear() {
-  const values = [...this.map.values()];
-  this.map.clear();
-  return values.reverse();
-}
-```
+## 最后回到切入点
 
-真实 Cordis 还处理 Promise、generator、async generator 以及 PENDING、LOADING、ACTIVE、FAILED、UNLOADING、DISPOSED 等状态。Mini 版只保留最重要的所有权模型：**effect 被哪个插件创建，就由哪个插件的 Context/Fiber 负责撤销。**
+DeepSeek Harness 是我认识 Cordis 的入口。Harness 里的工具、模型、会话和界面能力都可以由插件贡献；当配置切换或插件热更新发生时，旧插件留下的 listener、timer 和 service 就会变成真实问题。
 
-## `provide()` 为什么也能自动卸载
+Cordis 的答案很克制：给每次插件挂载一个 Context/Fiber，让插件通过它贡献能力，也通过它撤销能力。卸载不需要全局猜测，只需要沿着已经登记好的所有权链执行 disposer。
 
-现在再看服务注册就不会觉得神秘。`ctx.provide()` 能在插件卸载时移除服务，不是因为 Context 会扫描某张服务表，而是因为 `provide()` 内部也登记了 effect：
+如果只带走一句话，就带走这句：
 
-```ts
-provide(name: string, value?: any) {
-  return this.ctx.fiber.effect(() => {
-    this.store[key] = value;
+> 卸载不是“找到所有资源再清理”，而是“创建资源时就记录它归谁所有”。
 
-    return async () => {
-      delete this.store[key];
-    };
-  });
-}
-```
+下一步可以继续研究 `provide()`、`inject` 和服务依赖的启停；它们会复用本文建立的同一个生命周期模型。
 
-事件监听器、服务、mixin 等 API 也是同一个思路：创建资源时登记撤销操作，卸载时由当前 Fiber 统一执行。
-
-```txt
-ctx.provide() ─┐
-ctx.on()      ├─→ effect() → current Fiber
-ctx.plugin()  ┘
-```
-
-所以 Context 的价值不是“里面放了很多 API”，而是这些 API 共享了一个生命周期约定：**所有可撤销的副作用，都必须归属于当前 Context/Fiber。**
-
-## Context 能解决什么，不能解决什么
-
-它能解决：
-
-- 副作用属于哪个插件实例。
-- helper 不需要层层返回 disposer。
-- 子插件如何归属于父插件。
-- 卸载时如何找到完整的资源集合。
-- 服务、监听器和插件如何共享同一生命周期。
-
-它不能自动解决：
-
-- 没有通过 effect 登记的原始副作用。
-- 插件写入的外部数据库数据。
-- 已经发送到网络或其他进程的不可逆操作。
-- disposer 自己没有实现完整清理的情况。
-
-Context 管理的是**可撤销副作用的所有权**，不是让所有操作自动变得可逆。
-
-## 回到 DeepSeek Harness
-
-现在再看 DeepSeek Harness 使用 Cordis，关注点就清楚了。Harness 的工具、模型、会话、提示词片段和界面能力都由插件贡献；插件还可能监听模型事件、启动后台任务或加载子插件。
-
-如果这些注册散落在全局对象里，配置切换和插件热更新就很容易留下旧资源。Cordis 给每次插件挂载分配独立 Context/Fiber，插件通过这个作用域贡献能力，卸载时由同一个作用域撤销贡献。
-
-DeepSeek Harness 是我注意到 Cordis 的入口，但真正值得带走的规则只有一句：
-
-> 所有可撤销的副作用，都必须归属于一个 Context。
-
-## 小结与下一步
-
-这次没有把 Context 当成依赖容器来讲，而是先建立了它更基础的生命周期含义：
-
-```txt
-插件拿到 Context
-  → Context 记录 effect
-  → Fiber 持有插件实例的生命周期状态
-  → disposer 逆序执行
-  → 插件及其子插件完整卸载
-```
-
-下一篇再加入具名服务，并回答两个问题：
-
-1. 为什么插件可以直接读取 `ctx.logger`，却不需要导入具体实现？
-2. 服务提供方卸载后，依赖它的插件为什么会停止，并在服务恢复后重新启动？
-
-那时再引入 Proxy、`provide()`、`inject` 和 Fiber 状态机，顺序会更自然。
-
-如果要自测，可以先回答：
-
-<details>
-<summary>插件卸载最难的部分是什么？</summary>
-
-不是调用清理 API，而是保留副作用与插件实例之间的所有权关系。
-</details>
-
-<details>
-<summary>为什么子 Context 要登记到父 Context？</summary>
-
-因为子 Context 本身就是父 Context 的一个 effect；这样父插件卸载时会递归卸载所有子插件。
-</details>
-
-<details>
-<summary>直接调用 setInterval() 为什么不会被 Cordis 自动清理？</summary>
-
-Context 无法自动观察任意 JavaScript 副作用。必须通过 `ctx.effect()` 登记 `clearInterval()`，或使用内部已经登记 effect 的 Cordis API。
-</details>
+如果有任何一步不清楚，可以直接追问。也可以先打开[第一课：Context 记录副作用的所有权](../../lessons/0001-context-owns-effects.html)，再对照[Context 生命周期速查页](../../reference/cordis-context-lifecycle.html)。
